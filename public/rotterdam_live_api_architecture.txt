@@ -1,0 +1,221 @@
+# Rotterdam Live API — Architectural Specification & System Documentation
+
+> [!NOTE]
+> **Platform Version:** 1.5.0 (Sprint: Official Kadaster BAG Addresses, Verified Retail Infrastructure & Unified Global Spatial Search)  
+> **Environment:** Hetzner Cloud Linux VPS (Rotterdam Dockerized Stack)  
+> **Contract:** Sub-30ms response times, zero synchronous external API calls on client requests, automated PostGIS district assignment, strict RFC 7946 GeoJSON.
+
+---
+
+## 1. Executive Summary & Core Architecture
+
+The **Rotterdam Live API** (`rotterdam-live-api`) is an asynchronous, high-throughput spatial data platform designed to power the real-time interactive map of Rotterdam (`rott-live`). It aggregates:
+1. **High-Frequency Situational Feeds:** P2000 112 emergency dispatches, movable bridge openings, and parking garage live occupancy.
+2. **Municipal Infrastructure & Environment:** Roadworks, Rijkswaterstaat waterways/NAP water levels, DCMR air quality, and Stedin electrical grid power outages.
+3. **Semi-Static Civic Amenities:** Public toilets, drinking water taps, EV chargers, AEDs, and **8,803 verified outdoor cameras**.
+4. **Official Kadaster BAG Addresses:** **382,814 official doorway points** covering every registered Dutch building in Gemeentecode `0599` (Rotterdam) with building purpose (`gebruiksdoel`), postal codes, surface areas, and construction years.
+5. **Verified Commercial Retail Infrastructure:** **2,950 retail venues, supermarkets, and shops**, spatially linked (97.3% linkage) to official Kadaster BAG buildings and doorway addresses.
+6. **Unified Global Spatial Search Engine:** Sub-10ms multi-domain search across addresses, retail facilities, and civic amenities powered by PostgreSQL `pg_trgm` similarity ranking.
+
+```mermaid
+flowchart TD
+    subgraph "External Feeds & Ingestion Sources"
+        BAG["Kadaster / PDOK WFS 2.0 (382,814 BAG Addresses)"]
+        OSM["Zuid-Holland Geofabrik PBF (C++ Osmium Engine)"]
+        P2000["P2000 Capcode Feed (112 Veiligheidsregio)"]
+        RWS["Rijkswaterstaat (Traffic, Waterinfo, Bridges)"]
+        MUN["Gemeente Rotterdam ArcGIS (SB_Infra, Toilets, Taps, EV)"]
+        STEDIN["Stedin Regional Grid (Power Outages)"]
+        PDOK["PDOK WFS (19 Official CBS Districts)"]
+    end
+
+    subgraph "Ingestion Worker (worker.py / APScheduler)"
+        SCHED["APScheduler Task Orchestrator"]
+        BAG_H["RotterdamBAGHarvester (Multi-Prefix WFS)"]
+        RET_H["RotterdamRetailHarvester (Osmium + PostGIS Linker)"]
+        CAM_H["RotterdamCameraHarvester (Osmium + ArcGIS)"]
+        AMEN_H["MunicipalAmenitiesIngestor"]
+        MOB_H["MobilityIngestor & RoadworksIngestor"]
+        UTIL_H["WaterwaysIngestor & PowerOutageIngestor"]
+    end
+
+    subgraph "Database & Cache Layer"
+        PG[("PostgreSQL 16 + PostGIS\n- rotterdam_addresses (382,814)\n- rotterdam_retail (2,950)\n- city_amenities (9,600+)\n- live_events\n- rotterdam_districts (19)\n(Spatial GiST & pg_trgm GIN)")]
+        REDIS[("Redis 7 (In-Memory Cache)\nTTL: 15s - 7200s")]
+    end
+
+    subgraph "API Service (FastAPI / Uvicorn)"
+        API["FastAPI Routing Engine (/api/v1)\nSub-30ms RFC 7946 GeoJSON"]
+    end
+
+    subgraph "Frontend Client"
+        WEB["MapLibre GL + Svelte (rott-live)"]
+    end
+
+    BAG & OSM & P2000 & RWS & MUN & STEDIN & PDOK --> SCHED
+    SCHED --> BAG_H & RET_H & CAM_H & AMEN_H & MOB_H & UTIL_H
+    BAG_H & RET_H & CAM_H & AMEN_H & MOB_H & UTIL_H --> PG
+    PG --> API
+    REDIS <--> API
+    API --> WEB
+```
+
+---
+
+## 2. Infrastructure & Container Topology
+
+The application runs via Docker Compose on an internal bridged network (`rotterdam_net`):
+
+| Container Name | Service | Internal Port | Host Port | Role |
+| :--- | :--- | :--- | :--- | :--- |
+| `rotterdam_live_api` | FastAPI / Uvicorn | 8000 | `0.0.0.0:8000` | Asynchronous REST API serving cached GeoJSON. |
+| `rotterdam_live_worker` | Python Ingestion Worker | — | — | APScheduler background daemon running all ingestion loops. |
+| `rotterdam_live_db` | PostgreSQL 16 + PostGIS | 5432 | `127.0.0.1:5432` | PostGIS spatial database with GiST and pg_trgm GIN indexes. |
+| `rotterdam_live_redis` | Redis 7 Alpine | 6379 | `127.0.0.1:6379` | Response caching and query acceleration. |
+
+---
+
+## 3. Database Schema & PostGIS Spatial Architecture
+
+### A. `rotterdam_addresses` Table (Official Kadaster BAG)
+Stores the complete ground truth of all registered verblijfsobjecten in Rotterdam:
+* **Fields:**
+  * `address_id` (VARCHAR PK): Official BAG Verblijfsobject ID (e.g. `0599010000152839`).
+  * `pand_id` (VARCHAR): Linked building ID (e.g. `0599100000600462`).
+  * `street_name` (VARCHAR): Official openbare ruimte name.
+  * `house_number` (INTEGER): Huisnummer.
+  * `house_letter` (VARCHAR, nullable): Huisletter.
+  * `house_addition` (VARCHAR, nullable): Huisnummertoevoeging.
+  * `postal_code` (VARCHAR(7)): Formatted 6-character Dutch postal code (`NNNN AA`).
+  * `city` (VARCHAR): "Rotterdam" (or incorporated village/district).
+  * `purpose` (VARCHAR): Official BAG `gebruiksdoel` (`winkelfunctie`, `woonfunctie`, `horecafunctie`, `kantoorfunctie`, `industriefunctie`, `onderwijsfunctie`, `gezondheidszorgfunctie`, `bijeenkomstfunctie`, `sportfunctie`, `logiesfunctie`).
+  * `surface_area` (INTEGER): Oppervlakte in m².
+  * `construction_year` (INTEGER, nullable): Bouwjaar of linked building.
+  * `status` (VARCHAR): Verblijfsobject status ("Verblijfsobject in gebruik").
+  * `district` (VARCHAR): Spatially assigned Rotterdam municipal district.
+  * `geom` (geometry(Point, 4326)): Exact doorway coordinates in EPSG:4326.
+* **Database Optimization & Indexes:**
+  ```sql
+  CREATE INDEX idx_addresses_geom ON rotterdam_addresses USING GIST (geom);
+  CREATE INDEX idx_addresses_postcode_num ON rotterdam_addresses (postal_code, house_number);
+  CREATE INDEX idx_addresses_street_trgm ON rotterdam_addresses USING GIN (street_name gin_trgm_ops);
+  CREATE INDEX idx_addresses_district ON rotterdam_addresses (district);
+  CREATE INDEX idx_addresses_purpose ON rotterdam_addresses (purpose);
+  ```
+
+### B. `rotterdam_retail` Table (Commercial Retail Infrastructure)
+Stores verified physical retail venues, supermarkets, and shops:
+* **Fields:**
+  * `id` (VARCHAR PK): Formatted venue ID (`retail-{lon}_{lat}`).
+  * `name` (VARCHAR): Commercial venue name (e.g. "Albert Heijn", "Action", "HEMA").
+  * `brand` (VARCHAR, nullable): Brand or corporate chain.
+  * `shop_type` (VARCHAR): Normalized category (`supermarket`, `clothes`, `bakery`, `chemist`, `pharmacy`, `convenience`, `hairdresser`, `butcher`, `shoes`, `optician`, `florist`, `electronics`, `books`, etc.).
+  * `street_name`, `house_number`, `postal_code`, `city`, `district` (VARCHAR): Address attributes.
+  * `bag_address_id` (VARCHAR, nullable): Foreign key to `rotterdam_addresses.address_id`.
+  * `bag_pand_id` (VARCHAR, nullable): Foreign key to linked building pand ID.
+  * `opening_hours`, `phone`, `website`, `wheelchair` (VARCHAR): Operating attributes.
+  * `details` (JSONB): Raw OSM tags and metadata.
+  * `geom` (geometry(Point, 4326)): Centroid/entrance location with GiST index.
+* **Spatial Linkage:** **97.3% (2,871 venues)** are directly linked to official Kadaster BAG doorway addresses and building IDs.
+* **Database Optimization & Indexes:**
+  ```sql
+  CREATE INDEX idx_retail_geom ON rotterdam_retail USING GIST (geom);
+  CREATE INDEX idx_retail_name_trgm ON rotterdam_retail USING GIN (name gin_trgm_ops);
+  CREATE INDEX idx_retail_shop_district ON rotterdam_retail (shop_type, district);
+  CREATE INDEX idx_retail_brand ON rotterdam_retail (brand);
+  ```
+
+### C. `city_amenities` Table (Durable Civic Infrastructure & 8,803 Cameras)
+Stores urban amenities and physical sensors:
+* `subcategory`: `toilet`, `water_tap`, `ev_charger`, `aed`, `camera`.
+* PostGIS spatial GiST index on `geom`.
+
+### D. `live_events` Table (High-Frequency Real-Time Feeds)
+Stores transient events (P2000 emergencies, bridge openings, parking occupancy, power outages).
+
+### E. `rotterdam_districts` Table (19 Official CBS Municipal Districts)
+Enforces spatial boundary validation across Rotterdam: Centrum, Delfshaven, Overschie, Noord, Hillegersberg-Schiebroek, Kralingen-Crooswijk, Feijenoord, IJsselmonde, Charlois, Hoogvliet, Prins Alexander, Botlek-Europoort-Maasvlakte, Waalhaven-Eemhaven, Spaanse Polder, Vondelingenplaat, Nieuw Mathenesse, Pernis, Rotterdam-Noord-West, Rivium.
+
+---
+
+## 4. REST API Specification (`/api/v1/`)
+
+All endpoints return strict RFC 7946 GeoJSON `FeatureCollection` structures.
+
+### A. Kadaster BAG Addresses Endpoints (`/api/v1/addresses`)
+
+| Endpoint | Method | Description | Parameters |
+| :--- | :--- | :--- | :--- |
+| `/api/v1/addresses` | `GET` | List/filter BAG addresses. | `district`, `purpose`, `postal_code`, `street_name`, `bbox`, `limit` (max 5000), `offset` |
+| `/api/v1/addresses/search` | `GET` | Autocomplete / Trigram fuzzy search. | `q` (required), `limit` (default 20, max 100) |
+| `/api/v1/addresses/stats` | `GET` | Aggregate stats by purpose and district. | None (Cached 1 hr) |
+| `/api/v1/addresses/{address_id}` | `GET` | Single BAG address by Verblijfsobject ID. | `address_id` (path) |
+
+### B. Retail Infrastructure Endpoints (`/api/v1/retail`)
+
+| Endpoint | Method | Description | Parameters |
+| :--- | :--- | :--- | :--- |
+| `/api/v1/retail` | `GET` | List/filter commercial venues. | `shop_type`, `brand`, `district`, `bbox`, `limit` (max 5000), `offset` |
+| `/api/v1/retail/supermarkets` | `GET` | Dedicated supermarket query. | `brand`, `district`, `bbox`, `limit`, `offset` |
+| `/api/v1/retail/stats` | `GET` | Retail counts by category and brand. | None (Cached 1 hr) |
+| `/api/v1/retail/{venue_id}` | `GET` | Single venue by ID. | `venue_id` (path) |
+
+### C. Unified Global Spatial Search Engine (`/api/v1/search`)
+
+* **Route:** `GET /api/v1/search`
+* **Query Parameters:**
+  * `q` (str, required): Search query (e.g., `Coolsingel`, `Albert Heijn`, `Kruidvat`, `Erasmusbrug`).
+  * `types` (str, default=`address,retail,amenity`): Comma-separated target entities.
+  * `limit` (int, default=10, max=50): Maximum results to return.
+* **Ranking Algorithm:** PostgreSQL `pg_trgm` similarity score (`similarity(col, q) DESC`) combined with exact prefix matching.
+* **Performance:** Cached in Redis with sub-10ms response times.
+
+---
+
+## 5. Background Harvesters & Ingestion Architecture
+
+```mermaid
+flowchart LR
+    subgraph "High-Frequency (30s - 60s)"
+        P2000["P2000 Emergencies (30s)"]
+        MOB["Garages & Bridges (60s)"]
+    end
+
+    subgraph "Medium-Frequency (10m - 15m)"
+        WW["Waterinfo Waterways (10m)"]
+        RW["Roadworks Closures (15m)"]
+        PO["Stedin Outages (15m)"]
+        CLN["Purge Stale Events (15m)"]
+    end
+
+    subgraph "Scheduled Batch (6h - 7d)"
+        CAM["Camera Harvester (6 hrs)"]
+        AMEN["Civic Amenities (24 hrs)"]
+        RET["Retail OSM Harvester (24 hrs)"]
+        BAG["Kadaster BAG WFS (7 days)"]
+    end
+```
+
+### A. `RotterdamBAGHarvester` (`app/ingestion/bag_harvester.py`)
+* **Source:** Kadaster / PDOK WFS 2.0 (`https://service.pdok.nl/lv/bag/wfs/v2_0`, `typeName=bag:verblijfsobject`).
+* **Technical Solution for PDOK 50k Limit:** PDOK limits queries to `startIndex <= 50,000`. Rotterdam contains 382,814 addresses. The harvester partitions queries across Dutch postal code prefixes (`301` to `319`), keeping every partition safely under 50,000 records.
+* **District Resolution:** Every address is mapped to one of the 19 Rotterdam municipal districts via PostGIS spatial join.
+
+### B. `RotterdamRetailHarvester` (`app/ingestion/retail_harvester.py`)
+* **Source:** Zuid-Holland OpenStreetMap PBF extract (`zuid-holland.osm.pbf`) via C++ `osmium-tool` filtering (`nwr/shop` and `nwr/amenity=marketplace,pharmacy`).
+* **PostGIS BAG Linker:** Automatically matches venue entrance points to official Kadaster BAG buildings and doorway addresses using `ST_DWithin` spatial proximity joins.
+
+---
+
+## 6. Verification & Test Suite
+
+The automated test suite runs via Pytest with clean connection pooling and async event loop isolation:
+* **Total Automated Tests:** 32 tests across 8 test suites.
+* **Pass Rate:** 100% (32 passed, 0 failed, 0 warnings).
+* **Execution Time:** ~1.4 seconds.
+* **Coverage:**
+  * Kadaster BAG Address endpoints & district filtering
+  * Retail endpoints & supermarket filtering
+  * Unified Global Spatial Search with pg_trgm similarity
+  * Live external ingestion feed smoke tests (GBFS, GTFS-RT, Rijnmond RSS, Open-Meteo, PDOK Locatieserver)
+  * RFC 7946 GeoJSON schema validation
