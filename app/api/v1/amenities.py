@@ -111,18 +111,18 @@ async def get_public_toilets(
 async def get_surveillance_cameras(
     camera_type: Optional[str] = Query(
         None,
-        description="Filter by camera type: traffic, surveillance, skyline_webcam, anpr",
+        description="Filter by camera type: commercial, surveillance, traffic, skyline_webcam, anpr",
     ),
     district: Optional[str] = Query(None, description="Filter by district"),
     bbox: Optional[str] = Query(None, description="Bounding box: min_lon,min_lat,max_lon,max_lat"),
-    limit: int = Query(300, ge=1, le=1000),
+    limit: int = Query(500, ge=1, le=2500),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db),
 ):
     """
-    Public outdoor camera infrastructure across Rotterdam:
-    Includes Rijkswaterstaat traffic cameras, municipal police surveillance (Art. 151c),
-    skyline/harbor webcams, and ANPR milieuzone enforcement portals.
+    Public and commercial outdoor camera infrastructure across Rotterdam:
+    Includes commercial company security (retail, banks, ATMs, parking, fuel),
+    police surveillance (Art. 151c), RWS traffic cameras, skyline webcams, and ANPR.
     """
     bbox_coords = parse_bbox_param(bbox)
     cache_key = f"amenities:cameras:{camera_type}:{district}:{bbox}:{limit}:{offset}"
