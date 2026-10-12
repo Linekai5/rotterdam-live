@@ -19,6 +19,7 @@ from app.ingestion.utilities import WaterwaysIngestor, PowerOutageIngestor
 from app.ingestion.camera_harvester import RotterdamCameraHarvester
 from app.ingestion.bag_harvester import RotterdamBAGHarvester
 from app.ingestion.retail_harvester import RotterdamRetailHarvester
+from app.ingestion.weather_harvester import RotterdamWeatherHarvester
 
 
 class IngestionScheduler:
@@ -36,6 +37,7 @@ class IngestionScheduler:
         self.camera_harvester = RotterdamCameraHarvester()
         self.bag_harvester = RotterdamBAGHarvester()
         self.retail_harvester = RotterdamRetailHarvester()
+        self.weather_harvester = RotterdamWeatherHarvester()
         self._is_running = False
 
     async def _safe_run(self, name: str, coro_func):
@@ -193,7 +195,37 @@ class IngestionScheduler:
             replace_existing=True,
         )
 
-        # 13. Database Cleanup
+        # 13. Buienradar 2-Hour Rain Nowcast (every 5 minutes)
+        self.scheduler.add_job(
+            self._safe_run,
+            "interval",
+            minutes=5,
+            args=["rain_nowcast", self.weather_harvester.fetch_rain_nowcast],
+            id="job_rain_nowcast",
+            replace_existing=True,
+        )
+
+        # 14. Buienradar & KNMI Weather Stations Telemetry (every 10 minutes)
+        self.scheduler.add_job(
+            self._safe_run,
+            "interval",
+            minutes=10,
+            args=["weather_stations", self.weather_harvester.fetch_weather_stations],
+            id="job_weather_stations",
+            replace_existing=True,
+        )
+
+        # 15. RainViewer Animated Radar Tiles Timeline (every 5 minutes)
+        self.scheduler.add_job(
+            self._safe_run,
+            "interval",
+            minutes=5,
+            args=["radar_frames", self.weather_harvester.fetch_radar_frames],
+            id="job_radar_frames",
+            replace_existing=True,
+        )
+
+        # 16. Database Cleanup
         self.scheduler.add_job(
             self.cleanup_expired_events,
             "interval",
@@ -220,6 +252,7 @@ class IngestionScheduler:
         await self._safe_run("amenity", self.amenities_ingestor.ingest)
         await self._safe_run("cameras", self.camera_harvester.ingest)
         await self._safe_run("retail", self.retail_harvester.ingest)
+        await self._safe_run("weather", self.weather_harvester.ingest)
         logger.info("Initial bootstrap ingestion pass finished.")
 
     async def stop(self):
@@ -239,6 +272,7 @@ class IngestionScheduler:
             await self.camera_harvester.close()
             await self.bag_harvester.close()
             await self.retail_harvester.close()
+            await self.weather_harvester.close()
             logger.info("Ingestion Scheduler stopped cleanly.")
 
 

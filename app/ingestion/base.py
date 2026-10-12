@@ -16,7 +16,22 @@ class BaseIngestor(ABC):
 
     async def get_client(self, verify_ssl: bool = True) -> httpx.AsyncClient:
         """Get or initialize persistent HTTP client with connection pooling."""
-        if self._client is None or self._client.is_closed:
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if (
+            self._client is None
+            or self._client.is_closed
+            or getattr(self, "_loop", None) is not current_loop
+        ):
+            if self._client and not self._client.is_closed:
+                try:
+                    await self._client.aclose()
+                except Exception:
+                    pass
+            self._loop = current_loop
             self._client = httpx.AsyncClient(
                 verify=verify_ssl,
                 timeout=self.timeout_seconds,
@@ -29,8 +44,12 @@ class BaseIngestor(ABC):
     async def close(self) -> None:
         """Close persistent HTTP client."""
         if self._client and not self._client.is_closed:
-            await self._client.aclose()
-            self._client = None
+            try:
+                await self._client.aclose()
+            except Exception:
+                pass
+        self._client = None
+        self._loop = None
 
     async def run_with_retry(
         self,
