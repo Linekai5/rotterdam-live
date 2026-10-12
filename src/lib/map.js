@@ -4,6 +4,9 @@ import styleClean from './style_clean.json';
 import styleSatellite from './style_satellite.json';
 import styleDark from './style_dark.json';
 import { installCoastalOcean, removeCoastalOcean, OCEAN_LAYER } from './coastalOcean.js';
+import { installLiveEvents, filterLiveEvents } from './liveLayers.js';
+
+export { installLiveEvents, filterLiveEvents };
 
 /**
  * Rotterdam coordinate bounding box [SW, NE]
@@ -131,6 +134,7 @@ export async function initMap(mapElement, onReady) {
         map.fitBounds(ROTTERDAM_BOUNDS, { padding: 40, animate: false });
       }
     }
+    installLiveEvents(map);
     if (onReady) onReady(map);
   });
 
@@ -164,6 +168,7 @@ export function switchStyle(map, mode, state = {}) {
     if (state.buildings3d) {
       toggle3DBuildings(map, true);
     }
+    installLiveEvents(map);
   });
 }
 

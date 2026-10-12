@@ -1,5 +1,5 @@
 <script>
-  import { switchStyle, toggleLabels, toggle3DBuildings, resetView } from './map.js';
+  import { switchStyle, toggleLabels, toggle3DBuildings, resetView, filterLiveEvents } from './map.js';
 
   export let map = null;
 
@@ -8,6 +8,11 @@
   let activeMode = urlParams?.get('mode') || 'satellite';
   let showLabels = true;
   let show3DBuildings = false;
+
+  let showEmergency = true;
+  let showMobility = true;
+  let showEnvironment = true;
+  let showNews = true;
 
   function selectMode(mode) {
     activeMode = mode;
@@ -34,6 +39,16 @@
     if (map) {
       resetView(map);
     }
+  }
+
+  function handleFilterLive() {
+    if (!map) return;
+    const active = [];
+    if (showEmergency) active.push('emergency');
+    if (showMobility) active.push('mobility');
+    if (showEnvironment) active.push('environment');
+    if (showNews) active.push('news');
+    filterLiveEvents(map, active);
   }
 </script>
 
@@ -118,6 +133,51 @@
           on:change={handle3DChange} 
         />
         <span class="toggle-text">3D Buildings</span>
+      </label>
+
+      <div class="divider"></div>
+
+      <!-- Live PostGIS Data Toggles -->
+      <div class="panel-section-title">Live Rotterdam (PostGIS)</div>
+
+      <label class="toggle-row">
+        <input 
+          type="checkbox" 
+          bind:checked={showEmergency} 
+          on:change={handleFilterLive} 
+        />
+        <span class="cat-dot" style="background-color: #ef4444;"></span>
+        <span class="toggle-text">Emergencies (P2000)</span>
+      </label>
+
+      <label class="toggle-row">
+        <input 
+          type="checkbox" 
+          bind:checked={showMobility} 
+          on:change={handleFilterLive} 
+        />
+        <span class="cat-dot" style="background-color: #3b82f6;"></span>
+        <span class="toggle-text">Mobility & Parking</span>
+      </label>
+
+      <label class="toggle-row">
+        <input 
+          type="checkbox" 
+          bind:checked={showEnvironment} 
+          on:change={handleFilterLive} 
+        />
+        <span class="cat-dot" style="background-color: #10b981;"></span>
+        <span class="toggle-text">Air Quality & Weather</span>
+      </label>
+
+      <label class="toggle-row">
+        <input 
+          type="checkbox" 
+          bind:checked={showNews} 
+          on:change={handleFilterLive} 
+        />
+        <span class="cat-dot" style="background-color: #f59e0b;"></span>
+        <span class="toggle-text">Civic Alerts & News</span>
       </label>
 
       <div class="divider"></div>
@@ -343,5 +403,13 @@
   .recenter-btn:hover {
     background: #f3f4f6;
     color: #111827;
+  }
+
+  .cat-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
   }
 </style>
