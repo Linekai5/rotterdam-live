@@ -1,7 +1,7 @@
 # Rotterdam Live API — Architectural Specification & System Documentation
 
 > [!NOTE]
-> **Platform Version:** 1.5.0 (Sprint: Official Kadaster BAG Addresses, Verified Retail Infrastructure & Unified Global Spatial Search)  
+> **Platform Version:** 1.6.0 (Sprint: Live Weather, Buienradar Rain Nowcast, KNMI Station Telemetry & RainViewer Radar Tiles)  
 > **Environment:** Hetzner Cloud Linux VPS (Rotterdam Dockerized Stack)  
 > **Contract:** Sub-30ms response times, zero synchronous external API calls on client requests, automated PostGIS district assignment, strict RFC 7946 GeoJSON.
 
@@ -12,14 +12,20 @@
 The **Rotterdam Live API** (`rotterdam-live-api`) is an asynchronous, high-throughput spatial data platform designed to power the real-time interactive map of Rotterdam (`rott-live`). It aggregates:
 1. **High-Frequency Situational Feeds:** P2000 112 emergency dispatches, movable bridge openings, and parking garage live occupancy.
 2. **Municipal Infrastructure & Environment:** Roadworks, Rijkswaterstaat waterways/NAP water levels, DCMR air quality, and Stedin electrical grid power outages.
-3. **Semi-Static Civic Amenities:** Public toilets, drinking water taps, EV chargers, AEDs, and **8,803 verified outdoor cameras**.
-4. **Official Kadaster BAG Addresses:** **382,814 official doorway points** covering every registered Dutch building in Gemeentecode `0599` (Rotterdam) with building purpose (`gebruiksdoel`), postal codes, surface areas, and construction years.
-5. **Verified Commercial Retail Infrastructure:** **2,950 retail venues, supermarkets, and shops**, spatially linked (97.3% linkage) to official Kadaster BAG buildings and doorway addresses.
-6. **Unified Global Spatial Search Engine:** Sub-10ms multi-domain search across addresses, retail facilities, and civic amenities powered by PostgreSQL `pg_trgm` similarity ranking.
+3. **Hyper-Accurate Live Weather & Radar Subsystem:**
+   - **Minute-by-minute 2-hour precipitation nowcast** from Buienradar radar reflectivity.
+   - **Real-time KNMI telemetry** from official observation stations (Rotterdam The Hague Airport `6344`, Hoek van Holland `6330`, Geulhaven `6343`).
+   - **MapLibre-ready Animated Weather Radar Tile Stream** from RainViewer with timeline timestamps and Slippy tile templates.
+4. **Semi-Static Civic Amenities:** Public toilets, drinking water taps, EV chargers, AEDs, and **8,803 verified outdoor cameras**.
+5. **Official Kadaster BAG Addresses:** **382,814 official doorway points** covering every registered Dutch building in Gemeentecode `0599` (Rotterdam) with building purpose (`gebruiksdoel`), postal codes, surface areas, and construction years.
+6. **Verified Commercial Retail Infrastructure:** **2,950 retail venues, supermarkets, and shops**, spatially linked (97.3% linkage) to official Kadaster BAG buildings and doorway addresses.
+7. **Unified Global Spatial Search Engine:** Sub-10ms multi-domain search across addresses, retail facilities, and civic amenities powered by PostgreSQL `pg_trgm` similarity ranking.
 
 ```mermaid
 flowchart TD
     subgraph "External Feeds & Ingestion Sources"
+        BUIEN["Buienradar Raintext & 2.0 JSON Feed"]
+        RADAR["RainViewer Open Weather Radar API"]
         BAG["Kadaster / PDOK WFS 2.0 (382,814 BAG Addresses)"]
         OSM["Zuid-Holland Geofabrik PBF (C++ Osmium Engine)"]
         P2000["P2000 Capcode Feed (112 Veiligheidsregio)"]
@@ -31,6 +37,7 @@ flowchart TD
 
     subgraph "Ingestion Worker (worker.py / APScheduler)"
         SCHED["APScheduler Task Orchestrator"]
+        WEATH_H["RotterdamWeatherHarvester (Nowcast + KNMI + Radar)"]
         BAG_H["RotterdamBAGHarvester (Multi-Prefix WFS)"]
         RET_H["RotterdamRetailHarvester (Osmium + PostGIS Linker)"]
         CAM_H["RotterdamCameraHarvester (Osmium + ArcGIS)"]
@@ -40,8 +47,8 @@ flowchart TD
     end
 
     subgraph "Database & Cache Layer"
-        PG[("PostgreSQL 16 + PostGIS\n- rotterdam_addresses (382,814)\n- rotterdam_retail (2,950)\n- city_amenities (9,600+)\n- live_events\n- rotterdam_districts (19)\n(Spatial GiST & pg_trgm GIN)")]
-        REDIS[("Redis 7 (In-Memory Cache)\nTTL: 15s - 7200s")]
+        PG[("PostgreSQL 16 + PostGIS\n- city_amenities (KNMI stations, cameras)\n- live_events (Weather telemetry, P2000)\n- rotterdam_addresses (382,814)\n- rotterdam_retail (2,950)\n- rotterdam_districts (19)")]
+        REDIS[("Redis 7 (In-Memory Cache)\nTTL: 15s - 600s\nSub-5ms responses")]
     end
 
     subgraph "API Service (FastAPI / Uvicorn)"
@@ -52,9 +59,9 @@ flowchart TD
         WEB["MapLibre GL + Svelte (rott-live)"]
     end
 
-    BAG & OSM & P2000 & RWS & MUN & STEDIN & PDOK --> SCHED
-    SCHED --> BAG_H & RET_H & CAM_H & AMEN_H & MOB_H & UTIL_H
-    BAG_H & RET_H & CAM_H & AMEN_H & MOB_H & UTIL_H --> PG
+    BUIEN & RADAR & BAG & OSM & P2000 & RWS & MUN & STEDIN & PDOK --> SCHED
+    SCHED --> WEATH_H & BAG_H & RET_H & CAM_H & AMEN_H & MOB_H & UTIL_H
+    WEATH_H & BAG_H & RET_H & CAM_H & AMEN_H & MOB_H & UTIL_H --> PG
     PG --> API
     REDIS <--> API
     API --> WEB
@@ -68,154 +75,172 @@ The application runs via Docker Compose on an internal bridged network (`rotterd
 
 | Container Name | Service | Internal Port | Host Port | Role |
 | :--- | :--- | :--- | :--- | :--- |
-| `rotterdam_live_api` | FastAPI / Uvicorn | 8000 | `${BIND_ADDRESS}:8000` | Asynchronous REST API serving cached GeoJSON. |
+| `rotterdam_live_api` | FastAPI / Uvicorn | 8000 | `${BIND_ADDRESS}:8000` | Asynchronous REST API serving cached GeoJSON and live weather. |
 | `rotterdam_live_worker` | Python Ingestion Worker | — | — | APScheduler background daemon running all ingestion loops. |
 | `rotterdam_live_db` | PostgreSQL 16 + PostGIS | 5432 | `localhost:5432` | PostGIS spatial database with GiST and pg_trgm GIN indexes. |
-| `rotterdam_live_redis` | Redis 7 Alpine | 6379 | `localhost:6379` | Response caching and query acceleration. |
+| `rotterdam_live_redis` | Redis 7 Alpine | 6379 | `localhost:6379` | In-memory cache delivering sub-5ms responses. |
 
 ---
 
-## 3. Database Schema & PostGIS Spatial Architecture
+## 3. The Weather & Map Radar Subsystem
 
-### A. `rotterdam_addresses` Table (Official Kadaster BAG)
-Stores the complete ground truth of all registered verblijfsobjecten in Rotterdam:
-* **Fields:**
-  * `address_id` (VARCHAR PK): Official BAG Verblijfsobject ID (e.g. `0599010000152839`).
-  * `pand_id` (VARCHAR): Linked building ID (e.g. `0599100000600462`).
-  * `street_name` (VARCHAR): Official openbare ruimte name.
-  * `house_number` (INTEGER): Huisnummer.
-  * `house_letter` (VARCHAR, nullable): Huisletter.
-  * `house_addition` (VARCHAR, nullable): Huisnummertoevoeging.
-  * `postal_code` (VARCHAR(7)): Formatted 6-character Dutch postal code (`NNNN AA`).
-  * `city` (VARCHAR): "Rotterdam" (or incorporated village/district).
-  * `purpose` (VARCHAR): Official BAG `gebruiksdoel` (`winkelfunctie`, `woonfunctie`, `horecafunctie`, `kantoorfunctie`, `industriefunctie`, `onderwijsfunctie`, `gezondheidszorgfunctie`, `bijeenkomstfunctie`, `sportfunctie`, `logiesfunctie`).
-  * `surface_area` (INTEGER): Oppervlakte in m².
-  * `construction_year` (INTEGER, nullable): Bouwjaar of linked building.
-  * `status` (VARCHAR): Verblijfsobject status ("Verblijfsobject in gebruik").
-  * `district` (VARCHAR): Spatially assigned Rotterdam municipal district.
-  * `geom` (geometry(Point, 4326)): Exact doorway coordinates in EPSG:4326.
-* **Database Optimization & Indexes:**
-  ```sql
-  CREATE INDEX idx_addresses_geom ON rotterdam_addresses USING GIST (geom);
-  CREATE INDEX idx_addresses_postcode_num ON rotterdam_addresses (postal_code, house_number);
-  CREATE INDEX idx_addresses_street_trgm ON rotterdam_addresses USING GIN (street_name gin_trgm_ops);
-  CREATE INDEX idx_addresses_district ON rotterdam_addresses (district);
-  CREATE INDEX idx_addresses_purpose ON rotterdam_addresses (purpose);
-  ```
+Implemented in [`app/ingestion/weather_harvester.py`](file:///home/homeaccount/rotterdam-live-api/app/ingestion/weather_harvester.py) and [`app/api/v1/weather.py`](file:///home/homeaccount/rotterdam-live-api/app/api/v1/weather.py).
 
-### B. `rotterdam_retail` Table (Commercial Retail Infrastructure)
-Stores verified physical retail venues, supermarkets, and shops:
-* **Fields:**
-  * `id` (VARCHAR PK): Formatted venue ID (`retail-{lon}_{lat}`).
-  * `name` (VARCHAR): Commercial venue name (e.g. "Albert Heijn", "Action", "HEMA").
-  * `brand` (VARCHAR, nullable): Brand or corporate chain.
-  * `shop_type` (VARCHAR): Normalized category (`supermarket`, `clothes`, `bakery`, `chemist`, `pharmacy`, `convenience`, `hairdresser`, `butcher`, `shoes`, `optician`, `florist`, `electronics`, `books`, etc.).
-  * `street_name`, `house_number`, `postal_code`, `city`, `district` (VARCHAR): Address attributes.
-  * `bag_address_id` (VARCHAR, nullable): Foreign key to `rotterdam_addresses.address_id`.
-  * `bag_pand_id` (VARCHAR, nullable): Foreign key to linked building pand ID.
-  * `opening_hours`, `phone`, `website`, `wheelchair` (VARCHAR): Operating attributes.
-  * `details` (JSONB): Raw OSM tags and metadata.
-  * `geom` (geometry(Point, 4326)): Centroid/entrance location with GiST index.
-* **Spatial Linkage:** **97.3% (2,871 venues)** are directly linked to official Kadaster BAG doorway addresses and building IDs.
-* **Database Optimization & Indexes:**
-  ```sql
-  CREATE INDEX idx_retail_geom ON rotterdam_retail USING GIST (geom);
-  CREATE INDEX idx_retail_name_trgm ON rotterdam_retail USING GIN (name gin_trgm_ops);
-  CREATE INDEX idx_retail_shop_district ON rotterdam_retail (shop_type, district);
-  CREATE INDEX idx_retail_brand ON rotterdam_retail (brand);
-  ```
+### A. Buienradar 2-Hour Rain Nowcast
+* **Source:** `https://gpsgadget.buienradar.nl/data/raintext/?lat={lat}&lon={lon}`
+* **Format:** Text lines of `RRR|HH:MM` in 5-minute increments for 2 hours (24 items).
+* **Meteorological Conversion:**
+  $$\text{intensity (mm/h)} = 10^{\frac{\text{value} - 109}{32}}$$
+  *(value `000` = `0.0 mm/h`, values $< 077$ = drizzle, $> 200$ = heavy downpours).*
+* **Telemetry Derived:**
+  * `will_rain_in_2h` (bool)
+  * `max_intensity_mm_h` (float)
+  * `first_rain_in_minutes` (int, or null if dry)
+  * `summary` (Dutch sentence: e.g. *"Droog momenteel, regen verwacht over circa 25 minuten"*).
 
-### C. `city_amenities` Table (Durable Civic Infrastructure & 8,803 Cameras)
-Stores urban amenities and physical sensors:
-* `subcategory`: `toilet`, `water_tap`, `ev_charger`, `aed`, `camera`.
-* PostGIS spatial GiST index on `geom`.
+### B. KNMI Regional Weather Stations
+* **Source:** `https://data.buienradar.nl/2.0/feed/json`
+* **Target Stations:**
+  1. `6344`: **Rotterdam The Hague Airport (Zestienhoven)** (Primary, District: Overschie)
+  2. `6330`: **Hoek van Holland** (Coastal / Port winds, District: Botlek-Europoort-Maasvlakte)
+  3. `6343`: **Rotterdam Geulhaven** (Port / Industrial, District: Botlek-Europoort-Maasvlakte)
+* **Measurements Stored:**
+  * Air & feels-like temperature (°C), ground temperature (°C), relative humidity (%)
+  * Barometric air pressure (hPa)
+  * Wind speed (m/s, km/h, and Beaufort), wind gusts (m/s, km/h), wind direction (degrees and compass string)
+  * Precipitation intensity (mm/h), rainfall last hour & 24 hours (mm)
+  * Visibility (meters), solar irradiance (W/m²), Dutch condition description, and icon URLs.
 
-### D. `live_events` Table (High-Frequency Real-Time Feeds)
-Stores transient events (P2000 emergencies, bridge openings, parking occupancy, power outages).
-
-### E. `rotterdam_districts` Table (19 Official CBS Municipal Districts)
-Enforces spatial boundary validation across Rotterdam: Centrum, Delfshaven, Overschie, Noord, Hillegersberg-Schiebroek, Kralingen-Crooswijk, Feijenoord, IJsselmonde, Charlois, Hoogvliet, Prins Alexander, Botlek-Europoort-Maasvlakte, Waalhaven-Eemhaven, Spaanse Polder, Vondelingenplaat, Nieuw Mathenesse, Pernis, Rotterdam-Noord-West, Rivium.
+### C. RainViewer Animated Radar Tile Stream for MapLibre
+* **Source:** `https://api.rainviewer.com/public/weather-maps.json`
+* **Tile URL Pattern:** `https://tilecache.rainviewer.com/v2/radar/{path}/512/{z}/{x}/{y}/2/1_1.png`
+* **Capabilities:** Supplies an ordered timeline of past frames (and future nowcast frames) with Unix timestamps and formatted UTC timestamps, allowing the frontend to smoothly animate rain cloud movements.
 
 ---
 
 ## 4. REST API Specification (`/api/v1/`)
 
-All endpoints return strict RFC 7946 GeoJSON `FeatureCollection` structures.
+All endpoints return RFC 7946 GeoJSON or structured JSON with sub-30ms latency (sub-5ms from Redis).
 
-### A. Kadaster BAG Addresses Endpoints (`/api/v1/addresses`)
+### A. Live Weather Endpoints (`/api/v1/weather`)
 
-| Endpoint | Method | Description | Parameters |
+| Endpoint | Method | Description | Cache TTL |
 | :--- | :--- | :--- | :--- |
-| `/api/v1/addresses` | `GET` | List/filter BAG addresses. | `district`, `purpose`, `postal_code`, `street_name`, `bbox`, `limit` (max 5000), `offset` |
-| `/api/v1/addresses/search` | `GET` | Autocomplete / Trigram fuzzy search. | `q` (required), `limit` (default 20, max 100) |
-| `/api/v1/addresses/stats` | `GET` | Aggregate stats by purpose and district. | None (Cached 1 hr) |
-| `/api/v1/addresses/{address_id}` | `GET` | Single BAG address by Verblijfsobject ID. | `address_id` (path) |
+| `/api/v1/weather/live` | `GET` | Unified instant overview of current Rotterdam weather, wind, rain status, and natural language summary. | 300s (5m) |
+| `/api/v1/weather/rain-forecast` | `GET` | 2-hour minute-by-minute rain nowcast (`lat`, `lon` query params). | 300s (5m) |
+| `/api/v1/weather/radar` | `GET` | Animated radar tile timeline and MapLibre tile URL templates. | 300s (5m) |
+| `/api/v1/weather/stations` | `GET` | GeoJSON FeatureCollection of official KNMI stations in Greater Rotterdam. | 600s (10m) |
+| `/api/v1/weather/stations/{station_id}` | `GET` | Single KNMI station by ID (`6344`, `6330`, `6343`). | 600s (10m) |
 
-### B. Retail Infrastructure Endpoints (`/api/v1/retail`)
+### B. Kadaster BAG Addresses Endpoints (`/api/v1/addresses`)
+* `GET /api/v1/addresses`: Filter 382,814 official BAG verblijfsobjecten by district, purpose, postal code, bbox.
+* `GET /api/v1/addresses/search`: Autocomplete / pg_trgm fuzzy search.
+* `GET /api/v1/addresses/stats`: Breakdown by purpose and district.
+* `GET /api/v1/addresses/{address_id}`: Single address lookup.
 
-| Endpoint | Method | Description | Parameters |
-| :--- | :--- | :--- | :--- |
-| `/api/v1/retail` | `GET` | List/filter commercial venues. | `shop_type`, `brand`, `district`, `bbox`, `limit` (max 5000), `offset` |
-| `/api/v1/retail/supermarkets` | `GET` | Dedicated supermarket query. | `brand`, `district`, `bbox`, `limit`, `offset` |
-| `/api/v1/retail/stats` | `GET` | Retail counts by category and brand. | None (Cached 1 hr) |
-| `/api/v1/retail/{venue_id}` | `GET` | Single venue by ID. | `venue_id` (path) |
+### C. Retail Infrastructure Endpoints (`/api/v1/retail`)
+* `GET /api/v1/retail`: Filter 2,950 verified retail venues by category, brand, district, bbox.
+* `GET /api/v1/retail/supermarkets`: Supermarkets query (Albert Heijn, Jumbo, Dirk, PLUS, Aldi, Lidl).
+* `GET /api/v1/retail/stats`: Statistics on retail categories, brands, and BAG linkage.
+* `GET /api/v1/retail/{venue_id}`: Single venue lookup.
 
-### C. Unified Global Spatial Search Engine (`/api/v1/search`)
-
-* **Route:** `GET /api/v1/search`
-* **Query Parameters:**
-  * `q` (str, required): Search query (e.g., `Coolsingel`, `Albert Heijn`, `Kruidvat`, `Erasmusbrug`).
-  * `types` (str, default=`address,retail,amenity`): Comma-separated target entities.
-  * `limit` (int, default=10, max=50): Maximum results to return.
-* **Ranking Algorithm:** PostgreSQL `pg_trgm` similarity score (`similarity(col, q) DESC`) combined with exact prefix matching.
-* **Performance:** Cached in Redis with sub-10ms response times.
+### D. Unified Global Spatial Search (`/api/v1/search`)
+* `GET /api/v1/search?q={query}`: Multi-domain spatial search across addresses, retail facilities, and civic amenities ranked by trigram similarity.
 
 ---
 
-## 5. Background Harvesters & Ingestion Architecture
+## 5. Background Harvesters & Ingestion Schedules
+
+Managed by [`app/ingestion/scheduler.py`](file:///home/homeaccount/rotterdam-live-api/app/ingestion/scheduler.py):
 
 ```mermaid
 flowchart LR
-    subgraph "High-Frequency (30s - 60s)"
+    subgraph "High-Frequency (30s - 5m)"
         P2000["P2000 Emergencies (30s)"]
         MOB["Garages & Bridges (60s)"]
+        RAIN["Buienradar Rain Nowcast (5m)"]
+        RADAR["RainViewer Radar Tiles (5m)"]
     end
 
     subgraph "Medium-Frequency (10m - 15m)"
-        WW["Waterinfo Waterways (10m)"]
+        STATION["KNMI Weather Stations (10m)"]
+        WW["Waterways Levels (10m)"]
         RW["Roadworks Closures (15m)"]
         PO["Stedin Outages (15m)"]
-        CLN["Purge Stale Events (15m)"]
     end
 
-    subgraph "Scheduled Batch (6h - 7d)"
+    subgraph "Batch Cycles (6h - 7d)"
         CAM["Camera Harvester (6 hrs)"]
         AMEN["Civic Amenities (24 hrs)"]
-        RET["Retail OSM Harvester (24 hrs)"]
+        RET["Retail Harvester (24 hrs)"]
         BAG["Kadaster BAG WFS (7 days)"]
     end
 ```
 
-### A. `RotterdamBAGHarvester` (`app/ingestion/bag_harvester.py`)
-* **Source:** Kadaster / PDOK WFS 2.0 (`https://service.pdok.nl/lv/bag/wfs/v2_0`, `typeName=bag:verblijfsobject`).
-* **Technical Solution for PDOK 50k Limit:** PDOK limits queries to `startIndex <= 50,000`. Rotterdam contains 382,814 addresses. The harvester partitions queries across Dutch postal code prefixes (`301` to `319`), keeping every partition safely under 50,000 records.
-* **District Resolution:** Every address is mapped to one of the 19 Rotterdam municipal districts via PostGIS spatial join.
+---
 
-### B. `RotterdamRetailHarvester` (`app/ingestion/retail_harvester.py`)
-* **Source:** Zuid-Holland OpenStreetMap PBF extract (`zuid-holland.osm.pbf`) via C++ `osmium-tool` filtering (`nwr/shop` and `nwr/amenity=marketplace,pharmacy`).
-* **PostGIS BAG Linker:** Automatically matches venue entrance points to official Kadaster BAG buildings and doorway addresses using `ST_DWithin` spatial proximity joins.
+## 6. Frontend Integration Guide (MapLibre GL & Svelte)
+
+### A. Rendering Animated Weather Radar in MapLibre GL
+Add RainViewer radar tile raster source and layer:
+
+```javascript
+// Fetch radar metadata
+const res = await fetch('http://<API_HOST>:8000/api/v1/weather/radar');
+const radar = await res.json();
+const latestFrame = radar.latest_frame;
+
+// Add raster source with latest radar frame
+map.addSource('rain-radar', {
+  type: 'raster',
+  tiles: [latestFrame.tile_url],
+  tileSize: 512,
+  attribution: 'RainViewer / KNMI'
+});
+
+map.addLayer({
+  id: 'rain-radar-layer',
+  type: 'raster',
+  source: 'rain-radar',
+  paint: {
+    'raster-opacity': 0.75,
+    'raster-fade-duration': 200
+  }
+});
+
+// To animate through timeline:
+let frameIndex = 0;
+function animateRadar() {
+  const frame = radar.past_frames[frameIndex];
+  const source = map.getSource('rain-radar');
+  if (source) {
+    source.setTiles([frame.tile_url]);
+  }
+  frameIndex = (frameIndex + 1) % radar.past_frames.length;
+}
+setInterval(animateRadar, 1500);
+```
+
+### B. Consuming Live Weather Overview
+```javascript
+const liveRes = await fetch('http://<API_HOST>:8000/api/v1/weather/live');
+const weather = await liveRes.json();
+
+console.log(`${weather.summary}`);
+// "Zwaar bewolkt in Rotterdam (14.2°C), droog komende 2 uur met matige wind (3 Bft ZZO)"
+```
 
 ---
 
-## 6. Verification & Test Suite
+## 7. Verification & Automated Test Suite
 
-The automated test suite runs via Pytest with clean connection pooling and async event loop isolation:
-* **Total Automated Tests:** 32 tests across 8 test suites.
-* **Pass Rate:** 100% (32 passed, 0 failed, 0 warnings).
-* **Execution Time:** ~1.4 seconds.
-* **Coverage:**
-  * Kadaster BAG Address endpoints & district filtering
-  * Retail endpoints & supermarket filtering
-  * Unified Global Spatial Search with pg_trgm similarity
-  * Live external ingestion feed smoke tests (GBFS, GTFS-RT, Rijnmond RSS, Open-Meteo, PDOK Locatieserver)
-  * RFC 7946 GeoJSON schema validation
+* **Total Automated Tests:** 39 tests across 9 test suites.
+* **Pass Rate:** 100% (39 passed, 0 failed, 0 warnings).
+* **Execution Time:** ~1.5 seconds.
+* **Test Suites:**
+  * `tests/test_weather.py`: Mathematical conversion, live overview, rain nowcast, radar tiles, and KNMI stations.
+  * `tests/test_addresses.py`: BAG address endpoints, search, and district filtering.
+  * `tests/test_retail.py`: Retail venues, supermarket queries, brand filtering, and stats.
+  * `tests/test_search.py`: Unified global spatial search.
+  * `tests/test_live_ingestion_smoke.py`: Live feed smoke tests.
+  * `tests/test_schemas.py`, `tests/test_api_endpoints.py`, `tests/test_geocoding.py`, `tests/test_ingestion_parsers.py`.
