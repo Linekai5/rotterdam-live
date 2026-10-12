@@ -37,7 +37,7 @@ GeometryType = Union[PointGeometry, PolygonGeometry, MultiPolygonGeometry]
 class CanonicalEventProperties(BaseModel):
     id: str = Field(..., description="Unique event identifier")
     category: Literal[
-        "emergency", "mobility", "news", "environment", "spatial"
+        "emergency", "mobility", "news", "environment", "spatial", "amenity", "utility"
     ] = Field(..., description="High-level category")
     subcategory: str = Field(
         ..., description="Specific subcategory (e.g. brandweer, parking, bridge, transit, weather)"

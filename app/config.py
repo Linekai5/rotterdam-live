@@ -66,10 +66,17 @@ class Settings(BaseSettings):
     AIR_QUALITY_POLL_INTERVAL_SECONDS: int = 900
     SPATIAL_BASELINE_SYNC_HOURS: int = 24
 
-    # Optional External API Keys
+    # Low-Frequency & Municipal Ingestion Frequencies
+    AMENITIES_SYNC_HOURS: int = 24
+    ROADWORKS_POLL_INTERVAL_SECONDS: int = 900
+    WATERWAYS_POLL_INTERVAL_SECONDS: int = 600
+    POWER_OUTAGE_POLL_INTERVAL_SECONDS: int = 900
+
+    # Optional External API Keys & Utility Credentials
     PDOK_API_KEY: str = ""
     OPEN_DATA_SOFT_KEY: str = ""
     OPENOV_API_KEY: str = ""
+    ENERGIEONDERBREKINGEN_API_KEY: str = ""
 
     # Geospatial Constants
     ROTTERDAM_MIN_LON: float = 4.25

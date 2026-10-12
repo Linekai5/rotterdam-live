@@ -87,3 +87,40 @@ class RotterdamDistrict(Base):
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+
+
+class CityAmenity(Base):
+    """Municipal civic amenities and urban infrastructure (data.rotterdam.nl)."""
+    __tablename__ = "city_amenities"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    category: Mapped[str] = mapped_column(String(64), index=True, nullable=False, default="amenity")
+    subcategory: Mapped[str] = mapped_column(String(64), index=True, nullable=False)  # toilet, water_tap, ev_charger, camera, aed
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    district: Mapped[Optional[str]] = mapped_column(String(128), index=True, nullable=True)
+    details: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+
+    # PostGIS geometry: supports Point or Polygon, EPSG:4326
+    geom = mapped_column(
+        Geometry(geometry_type="GEOMETRY", srid=4326, spatial_index=True),
+        nullable=False,
+    )
+
+    is_active: Mapped[bool] = mapped_column(default=True, index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index("idx_city_amenities_subcat_active", "subcategory", "is_active"),
+        Index("idx_city_amenities_district_subcat", "district", "subcategory"),
+    )

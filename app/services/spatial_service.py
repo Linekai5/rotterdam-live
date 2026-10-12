@@ -224,3 +224,173 @@ async def query_live_events(
         features=features,
         total_count=len(features),
     )
+
+
+async def upsert_city_amenity(
+    amenity_data: Dict[str, Any], session: AsyncSession
+) -> bool:
+    """
+    Upsert a municipal amenity or POI into the city_amenities table.
+    amenity_data requires:
+    id, category, subcategory, name, description, district, details, lon, lat
+    """
+    stmt = text(
+        """
+        INSERT INTO city_amenities (
+            id, category, subcategory, name, description, district, details, geom, is_active, created_at, updated_at
+        )
+        VALUES (
+            :id, :category, :subcategory, :name, :description, :district, :details,
+            ST_SetSRID(ST_Point(:lon, :lat), 4326),
+            :is_active,
+            NOW(),
+            NOW()
+        )
+        ON CONFLICT (id) DO UPDATE SET
+            category = EXCLUDED.category,
+            subcategory = EXCLUDED.subcategory,
+            name = EXCLUDED.name,
+            description = EXCLUDED.description,
+            district = COALESCE(EXCLUDED.district, city_amenities.district),
+            details = EXCLUDED.details,
+            geom = EXCLUDED.geom,
+            is_active = EXCLUDED.is_active,
+            updated_at = NOW();
+        """
+    )
+    try:
+        await session.execute(
+            stmt,
+            {
+                "id": amenity_data["id"],
+                "category": amenity_data.get("category", "amenity"),
+                "subcategory": amenity_data["subcategory"],
+                "name": amenity_data["name"],
+                "description": amenity_data.get("description"),
+                "district": amenity_data.get("district"),
+                "details": json.dumps(amenity_data.get("details", {})),
+                "is_active": amenity_data.get("is_active", True),
+                "lon": amenity_data["lon"],
+                "lat": amenity_data["lat"],
+            },
+        )
+        await session.commit()
+        return True
+    except Exception as e:
+        await session.rollback()
+        logger.error("Failed to upsert city amenity {}: {}", amenity_data.get("id"), e)
+        return False
+
+
+async def query_city_amenities(
+    session: AsyncSession,
+    subcategory: Optional[str] = None,
+    district: Optional[str] = None,
+    wheelchair_accessible: Optional[bool] = None,
+    active_only: bool = True,
+    bbox: Optional[Tuple[float, float, float, float]] = None,
+    limit: int = 200,
+    offset: int = 0,
+) -> GeoJSONFeatureCollection:
+    """
+    Fast query returning canonical GeoJSON FeatureCollection for civic amenities.
+    BBOX format: (min_lon, min_lat, max_lon, max_lat).
+    Uses ST_AsGeoJSON for sub-30ms performance.
+    """
+    conditions = []
+    params: Dict[str, Any] = {"limit": limit, "offset": offset}
+
+    if subcategory:
+        conditions.append("subcategory = :subcategory")
+        params["subcategory"] = subcategory
+
+    if district:
+        conditions.append("district = :district")
+        params["district"] = district
+
+    if active_only:
+        conditions.append("is_active = true")
+
+    if wheelchair_accessible is not None:
+        if wheelchair_accessible:
+            conditions.append("(details->>'wheelchair_accessible' = 'true' OR details->>'rolstoeltoegankelijk' = 'true')")
+        else:
+            conditions.append("(details->>'wheelchair_accessible' = 'false' OR details->>'rolstoeltoegankelijk' = 'false')")
+
+    if bbox:
+        min_lon, min_lat, max_lon, max_lat = bbox
+        conditions.append(
+            "ST_Intersects(geom, ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326))"
+        )
+        params["min_lon"] = min_lon
+        params["min_lat"] = min_lat
+        params["max_lon"] = max_lon
+        params["max_lat"] = max_lat
+
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    query = text(
+        f"""
+        SELECT 
+            id,
+            category,
+            subcategory,
+            name,
+            description,
+            district,
+            details,
+            created_at,
+            ST_AsGeoJSON(geom) as geom_json
+        FROM city_amenities
+        {where_clause}
+        ORDER BY name ASC
+        LIMIT :limit OFFSET :offset;
+        """
+    )
+
+    result = await session.execute(query, params)
+    rows = result.fetchall()
+
+    features: List[GeoJSONFeature] = []
+    for row in rows:
+        (
+            am_id,
+            cat,
+            subcat,
+            nm,
+            desc,
+            dist,
+            dtl,
+            created,
+            geom_json_str,
+        ) = row
+
+        geom_dict = json.loads(geom_json_str) if geom_json_str else None
+        if not geom_dict:
+            continue
+
+        geometry = PointGeometry(
+            type="Point", coordinates=geom_dict.get("coordinates", [])
+        )
+
+        details_dict = dtl if isinstance(dtl, dict) else json.loads(dtl or "{}")
+
+        properties = CanonicalEventProperties(
+            id=am_id,
+            category=cat,
+            subcategory=subcat,
+            severity=1,
+            timestamp=created,
+            expires_at=None,
+            district=dist,
+            title=nm,
+            details=details_dict,
+        )
+
+        features.append(GeoJSONFeature(type="Feature", geometry=geometry, properties=properties))
+
+    return GeoJSONFeatureCollection(
+        type="FeatureCollection",
+        features=features,
+        total_count=len(features),
+    )

@@ -13,6 +13,9 @@ from app.ingestion.p2000 import P2000Ingestor
 from app.ingestion.mobility import MobilityIngestor
 from app.ingestion.news import NewsIngestor
 from app.ingestion.environment import EnvironmentIngestor
+from app.ingestion.amenities import MunicipalAmenitiesIngestor
+from app.ingestion.roadworks import RoadworksIngestor
+from app.ingestion.utilities import WaterwaysIngestor, PowerOutageIngestor
 
 
 class IngestionScheduler:
@@ -23,6 +26,10 @@ class IngestionScheduler:
         self.mobility_ingestor = MobilityIngestor()
         self.news_ingestor = NewsIngestor()
         self.environment_ingestor = EnvironmentIngestor()
+        self.amenities_ingestor = MunicipalAmenitiesIngestor()
+        self.roadworks_ingestor = RoadworksIngestor()
+        self.waterways_ingestor = WaterwaysIngestor()
+        self.power_outage_ingestor = PowerOutageIngestor()
         self._is_running = False
 
     async def _safe_run(self, name: str, coro_func):
@@ -110,7 +117,47 @@ class IngestionScheduler:
             replace_existing=True,
         )
 
-        # 6. Database Cleanup
+        # 6. Roadworks & Closures (15 min)
+        self.scheduler.add_job(
+            self._safe_run,
+            "interval",
+            seconds=settings.ROADWORKS_POLL_INTERVAL_SECONDS,
+            args=["mobility", self.roadworks_ingestor.ingest],
+            id="job_roadworks",
+            replace_existing=True,
+        )
+
+        # 7. Maritime Waterways (10 min)
+        self.scheduler.add_job(
+            self._safe_run,
+            "interval",
+            seconds=settings.WATERWAYS_POLL_INTERVAL_SECONDS,
+            args=["environment", self.waterways_ingestor.ingest],
+            id="job_waterways",
+            replace_existing=True,
+        )
+
+        # 8. Electricity Grid & Power Outages (15 min)
+        self.scheduler.add_job(
+            self._safe_run,
+            "interval",
+            seconds=settings.POWER_OUTAGE_POLL_INTERVAL_SECONDS,
+            args=["utility", self.power_outage_ingestor.ingest],
+            id="job_power_outages",
+            replace_existing=True,
+        )
+
+        # 9. Municipal Civic Amenities (toilets, water taps, EV chargers, cameras, aeds - daily)
+        self.scheduler.add_job(
+            self._safe_run,
+            "interval",
+            hours=settings.AMENITIES_SYNC_HOURS,
+            args=["amenity", self.amenities_ingestor.ingest],
+            id="job_amenities",
+            replace_existing=True,
+        )
+
+        # 10. Database Cleanup
         self.scheduler.add_job(
             self.cleanup_expired_events,
             "interval",
@@ -129,8 +176,12 @@ class IngestionScheduler:
         await self._safe_run("spatial", self.spatial_ingestor.ingest)
         await self._safe_run("emergency", self.p2000_ingestor.ingest)
         await self._safe_run("mobility", self.mobility_ingestor.ingest)
+        await self._safe_run("roadworks", self.roadworks_ingestor.ingest)
         await self._safe_run("news", self.news_ingestor.ingest)
         await self._safe_run("environment", self.environment_ingestor.ingest)
+        await self._safe_run("waterways", self.waterways_ingestor.ingest)
+        await self._safe_run("utility", self.power_outage_ingestor.ingest)
+        await self._safe_run("amenity", self.amenities_ingestor.ingest)
         logger.info("Initial bootstrap ingestion pass finished.")
 
     async def stop(self):
@@ -141,8 +192,12 @@ class IngestionScheduler:
             await self.spatial_ingestor.close()
             await self.p2000_ingestor.close()
             await self.mobility_ingestor.close()
+            await self.roadworks_ingestor.close()
             await self.news_ingestor.close()
             await self.environment_ingestor.close()
+            await self.waterways_ingestor.close()
+            await self.power_outage_ingestor.close()
+            await self.amenities_ingestor.close()
             logger.info("Ingestion Scheduler stopped cleanly.")
 
 

@@ -106,5 +106,7 @@ async def root():
             "environment": "/api/v1/environment",
             "spatial": "/api/v1/spatial/districts",
             "live_unified": "/api/v1/live",
+            "amenities": "/api/v1/amenities",
+            "utilities": "/api/v1/utilities/power-outages",
         },
     }

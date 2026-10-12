@@ -28,6 +28,9 @@ async def init_database():
         await conn.execute(
             text("CREATE INDEX IF NOT EXISTS idx_rotterdam_districts_geom ON rotterdam_districts USING GIST (geom);")
         )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_city_amenities_geom ON city_amenities USING GIST (geom);")
+        )
 
     logger.info("Database schema initialized successfully.")
 

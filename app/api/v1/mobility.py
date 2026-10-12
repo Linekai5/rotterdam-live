@@ -54,3 +54,37 @@ async def get_mobility(
 
     await set_cached_json(cache_key, result.model_dump(mode="json"), ttl_seconds=15)
     return result
+
+
+@router.get("/roadworks", response_model=GeoJSONFeatureCollection)
+async def get_roadworks(
+    district: Optional[str] = Query(None, description="Filter by district"),
+    active_only: bool = Query(True, description="Only return active roadworks"),
+    bbox: Optional[Tuple[float, float, float, float]] = Depends(parse_bbox_param),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db),
+) -> GeoJSONFeatureCollection:
+    """
+    Get active road closures, lane disruptions, and municipal roadwork permits from VGW.
+    """
+    bbox_str = quantize_bbox(*bbox) if bbox else "none"
+    cache_key = f"events:mobility:roadworks:{bbox_str}:{district}:{active_only}:{limit}:{offset}"
+
+    cached = await get_cached_json(cache_key)
+    if cached:
+        return GeoJSONFeatureCollection.model_validate(cached)
+
+    result = await query_live_events(
+        session=session,
+        category="mobility",
+        subcategory="roadworks",
+        district=district,
+        active_only=active_only,
+        bbox=bbox,
+        limit=limit,
+        offset=offset,
+    )
+
+    await set_cached_json(cache_key, result.model_dump(mode="json"), ttl_seconds=300)
+    return result
