@@ -109,6 +109,10 @@ async def get_public_toilets(
 
 @router.get("/cameras", response_model=GeoJSONFeatureCollection)
 async def get_surveillance_cameras(
+    camera_type: Optional[str] = Query(
+        None,
+        description="Filter by camera type: traffic, surveillance, skyline_webcam, anpr",
+    ),
     district: Optional[str] = Query(None, description="Filter by district"),
     bbox: Optional[str] = Query(None, description="Bounding box: min_lon,min_lat,max_lon,max_lat"),
     limit: int = Query(300, ge=1, le=1000),
@@ -116,10 +120,12 @@ async def get_surveillance_cameras(
     session: AsyncSession = Depends(get_db),
 ):
     """
-    Public CCTV and surveillance camera locations across Rotterdam.
+    Public outdoor camera infrastructure across Rotterdam:
+    Includes Rijkswaterstaat traffic cameras, municipal police surveillance (Art. 151c),
+    skyline/harbor webcams, and ANPR milieuzone enforcement portals.
     """
     bbox_coords = parse_bbox_param(bbox)
-    cache_key = f"amenities:cameras:{district}:{bbox}:{limit}:{offset}"
+    cache_key = f"amenities:cameras:{camera_type}:{district}:{bbox}:{limit}:{offset}"
     redis = await get_redis_client()
 
     if redis:
@@ -133,6 +139,7 @@ async def get_surveillance_cameras(
     geojson = await query_city_amenities(
         session=session,
         subcategory="camera",
+        camera_type=camera_type,
         district=district,
         bbox=bbox_coords,
         limit=limit,

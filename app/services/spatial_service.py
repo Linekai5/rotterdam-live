@@ -287,6 +287,7 @@ async def query_city_amenities(
     subcategory: Optional[str] = None,
     district: Optional[str] = None,
     wheelchair_accessible: Optional[bool] = None,
+    camera_type: Optional[str] = None,
     active_only: bool = True,
     bbox: Optional[Tuple[float, float, float, float]] = None,
     limit: int = 200,
@@ -310,6 +311,10 @@ async def query_city_amenities(
 
     if active_only:
         conditions.append("is_active = true")
+
+    if camera_type:
+        conditions.append("details->>'camera_type' = :camera_type")
+        params["camera_type"] = camera_type
 
     if wheelchair_accessible is not None:
         if wheelchair_accessible:

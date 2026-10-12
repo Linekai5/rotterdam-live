@@ -16,6 +16,7 @@ from app.ingestion.environment import EnvironmentIngestor
 from app.ingestion.amenities import MunicipalAmenitiesIngestor
 from app.ingestion.roadworks import RoadworksIngestor
 from app.ingestion.utilities import WaterwaysIngestor, PowerOutageIngestor
+from app.ingestion.camera_harvester import RotterdamCameraHarvester
 
 
 class IngestionScheduler:
@@ -30,6 +31,7 @@ class IngestionScheduler:
         self.roadworks_ingestor = RoadworksIngestor()
         self.waterways_ingestor = WaterwaysIngestor()
         self.power_outage_ingestor = PowerOutageIngestor()
+        self.camera_harvester = RotterdamCameraHarvester()
         self._is_running = False
 
     async def _safe_run(self, name: str, coro_func):
@@ -147,7 +149,7 @@ class IngestionScheduler:
             replace_existing=True,
         )
 
-        # 9. Municipal Civic Amenities (toilets, water taps, EV chargers, cameras, aeds - daily)
+        # 9. Municipal Civic Amenities (toilets, water taps, EV chargers, aeds - daily)
         self.scheduler.add_job(
             self._safe_run,
             "interval",
@@ -157,7 +159,17 @@ class IngestionScheduler:
             replace_existing=True,
         )
 
-        # 10. Database Cleanup
+        # 10. Dedicated Rotterdam Outdoor Camera Harvester (every 6 hours)
+        self.scheduler.add_job(
+            self._safe_run,
+            "interval",
+            hours=6,
+            args=["cameras", self.camera_harvester.ingest],
+            id="job_camera_harvester",
+            replace_existing=True,
+        )
+
+        # 11. Database Cleanup
         self.scheduler.add_job(
             self.cleanup_expired_events,
             "interval",
@@ -182,6 +194,7 @@ class IngestionScheduler:
         await self._safe_run("waterways", self.waterways_ingestor.ingest)
         await self._safe_run("utility", self.power_outage_ingestor.ingest)
         await self._safe_run("amenity", self.amenities_ingestor.ingest)
+        await self._safe_run("cameras", self.camera_harvester.ingest)
         logger.info("Initial bootstrap ingestion pass finished.")
 
     async def stop(self):
@@ -198,6 +211,7 @@ class IngestionScheduler:
             await self.waterways_ingestor.close()
             await self.power_outage_ingestor.close()
             await self.amenities_ingestor.close()
+            await self.camera_harvester.close()
             logger.info("Ingestion Scheduler stopped cleanly.")
 
 

@@ -162,10 +162,27 @@ class SpatialBaselineIngestor(BaseIngestor):
         async with AsyncSessionLocal() as session:
             for item in features_to_insert:
                 geom_geojson_str = json.dumps(item["geometry"])
+                # Check if coordinates are in EPSG:28992 (RD New: X > 180) or EPSG:4326
+                srid_source = 28992
+                try:
+                    first_coord = item["geometry"]["coordinates"][0]
+                    while isinstance(first_coord, list) and isinstance(first_coord[0], list):
+                        first_coord = first_coord[0]
+                    if isinstance(first_coord, list) and abs(first_coord[0]) <= 180:
+                        srid_source = 4326
+                except Exception:
+                    pass
+
+                geom_sql = (
+                    "ST_Transform(ST_SetSRID(ST_Multi(ST_GeomFromGeoJSON(:geom_geojson)), 28992), 4326)"
+                    if srid_source == 28992
+                    else "ST_SetSRID(ST_Multi(ST_GeomFromGeoJSON(:geom_geojson)), 4326)"
+                )
+
                 stmt = text(
-                    """
+                    f"""
                     INSERT INTO rotterdam_districts (id, code, name, district_type, properties, geom, updated_at)
-                    VALUES (:id, :code, :name, :district_type, :properties, ST_SetSRID(ST_Multi(ST_GeomFromGeoJSON(:geom_geojson)), 4326), NOW())
+                    VALUES (:id, :code, :name, :district_type, :properties, {geom_sql}, NOW())
                     ON CONFLICT (id) DO UPDATE SET
                         name = EXCLUDED.name,
                         properties = EXCLUDED.properties,
