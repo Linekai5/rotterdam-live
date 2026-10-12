@@ -17,6 +17,8 @@ from app.ingestion.amenities import MunicipalAmenitiesIngestor
 from app.ingestion.roadworks import RoadworksIngestor
 from app.ingestion.utilities import WaterwaysIngestor, PowerOutageIngestor
 from app.ingestion.camera_harvester import RotterdamCameraHarvester
+from app.ingestion.bag_harvester import RotterdamBAGHarvester
+from app.ingestion.retail_harvester import RotterdamRetailHarvester
 
 
 class IngestionScheduler:
@@ -32,6 +34,8 @@ class IngestionScheduler:
         self.waterways_ingestor = WaterwaysIngestor()
         self.power_outage_ingestor = PowerOutageIngestor()
         self.camera_harvester = RotterdamCameraHarvester()
+        self.bag_harvester = RotterdamBAGHarvester()
+        self.retail_harvester = RotterdamRetailHarvester()
         self._is_running = False
 
     async def _safe_run(self, name: str, coro_func):
@@ -169,7 +173,27 @@ class IngestionScheduler:
             replace_existing=True,
         )
 
-        # 11. Database Cleanup
+        # 11. Rotterdam Retail Infrastructure Harvester (daily)
+        self.scheduler.add_job(
+            self._safe_run,
+            "interval",
+            hours=24,
+            args=["retail", self.retail_harvester.ingest],
+            id="job_retail_harvester",
+            replace_existing=True,
+        )
+
+        # 12. Kadaster BAG Address Harvester (weekly)
+        self.scheduler.add_job(
+            self._safe_run,
+            "interval",
+            days=7,
+            args=["bag_addresses", self.bag_harvester.ingest],
+            id="job_bag_harvester",
+            replace_existing=True,
+        )
+
+        # 13. Database Cleanup
         self.scheduler.add_job(
             self.cleanup_expired_events,
             "interval",
@@ -195,6 +219,7 @@ class IngestionScheduler:
         await self._safe_run("utility", self.power_outage_ingestor.ingest)
         await self._safe_run("amenity", self.amenities_ingestor.ingest)
         await self._safe_run("cameras", self.camera_harvester.ingest)
+        await self._safe_run("retail", self.retail_harvester.ingest)
         logger.info("Initial bootstrap ingestion pass finished.")
 
     async def stop(self):
@@ -212,6 +237,8 @@ class IngestionScheduler:
             await self.power_outage_ingestor.close()
             await self.amenities_ingestor.close()
             await self.camera_harvester.close()
+            await self.bag_harvester.close()
+            await self.retail_harvester.close()
             logger.info("Ingestion Scheduler stopped cleanly.")
 
 
