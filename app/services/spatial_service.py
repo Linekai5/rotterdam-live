@@ -52,11 +52,12 @@ async def upsert_live_event(
     stmt = text(
         """
         INSERT INTO live_events (
-            id, category, subcategory, severity, timestamp, expires_at, district, title, details, geom, updated_at
+            id, category, subcategory, severity, timestamp, expires_at, district, title, details, geom, created_at, updated_at
         )
         VALUES (
             :id, :category, :subcategory, :severity, :timestamp, :expires_at, :district, :title, :details,
             ST_SetSRID(ST_Point(:lon, :lat), 4326),
+            NOW(),
             NOW()
         )
         ON CONFLICT (id) DO UPDATE SET

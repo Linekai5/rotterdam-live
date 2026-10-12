@@ -1,6 +1,9 @@
 services:
   db:
-    image: postgis/postgis:16-3.4
+    build:
+      context: .
+      dockerfile: Dockerfile.db
+    image: rotterdam_live_postgis:16
     container_name: rotterdam_live_db
     restart: unless-stopped
     environment:
@@ -46,6 +49,8 @@ services:
     env_file:
       - .env
     environment:
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: "1"
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-rotterdamlive_secret_2026}@db:5432/${POSTGRES_DB:-rotterdamlive}
       DATABASE_URL_SYNC: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-rotterdamlive_secret_2026}@db:5432/${POSTGRES_DB:-rotterdamlive}
       REDIS_URL: redis://redis:6379/0
@@ -77,6 +82,8 @@ services:
     env_file:
       - .env
     environment:
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: "1"
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-rotterdamlive_secret_2026}@db:5432/${POSTGRES_DB:-rotterdamlive}
       DATABASE_URL_SYNC: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-rotterdamlive_secret_2026}@db:5432/${POSTGRES_DB:-rotterdamlive}
       REDIS_URL: redis://redis:6379/0

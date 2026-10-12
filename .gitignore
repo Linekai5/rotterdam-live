@@ -46,6 +46,7 @@ redisdata/
 *.sqlite
 *.sqlite3
 *.db
+!Dockerfile.db
 
 # Logs
 logs/

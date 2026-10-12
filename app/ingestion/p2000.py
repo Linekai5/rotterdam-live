@@ -76,7 +76,10 @@ class P2000Ingestor(BaseIngestor):
     async def ingest(self) -> Dict[str, Any]:
         """Scrape, parse, geocode, and store P2000 live events."""
         client = await self.get_client()
-        resp = await client.get(P2000_RSS_URL)
+        resp = await client.get(
+            P2000_RSS_URL,
+            headers={"User-Agent": "curl/8.5.0", "Accept": "*/*"}
+        )
         if resp.status_code != 200:
             raise RuntimeError(f"P2000 RSS responded with status {resp.status_code}")
 

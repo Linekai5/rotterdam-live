@@ -19,6 +19,9 @@ FROM python:3.12-slim AS runtime
 
 WORKDIR /app
 
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
 # Install runtime libraries
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
