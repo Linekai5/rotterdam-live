@@ -141,6 +141,10 @@ async def get_surveillance_cameras(
         None,
         description="Filter by category: commercial, surveillance, traffic, anpr, transit, infrastructure, skyline_webcam, general",
     ),
+    has_live_feed: Optional[bool] = Query(
+        None,
+        description="Filter for cameras with direct viewing access (live video or snapshot stream)",
+    ),
     district: Optional[str] = Query(None, description="Filter by Rotterdam district"),
     bbox: Optional[str] = Query(None, description="Bounding box: min_lon,min_lat,max_lon,max_lat"),
     limit: int = Query(500, ge=1, le=5000),
@@ -153,7 +157,7 @@ async def get_surveillance_cameras(
     If camera_type is omitted, all verified cameras across all categories are returned.
     """
     bbox_coords = parse_bbox_param(bbox)
-    cache_key = f"amenities:cameras:{camera_type}:{district}:{bbox}:{limit}:{offset}"
+    cache_key = f"amenities:cameras:{camera_type}:{has_live_feed}:{district}:{bbox}:{limit}:{offset}"
     redis = await get_redis_client()
 
     if redis:
@@ -168,6 +172,50 @@ async def get_surveillance_cameras(
         session=session,
         subcategory="camera",
         camera_type=camera_type,
+        has_live_feed=has_live_feed,
+        district=district,
+        bbox=bbox_coords,
+        limit=limit,
+        offset=offset,
+    )
+
+    if redis:
+        try:
+            await redis.setex(cache_key, 7200, geojson.model_dump_json())
+        except Exception:
+            pass
+
+    return geojson
+
+
+@router.get("/cameras/live", response_model=GeoJSONFeatureCollection)
+async def get_live_viewable_cameras(
+    district: Optional[str] = Query(None, description="Filter by district"),
+    bbox: Optional[str] = Query(None, description="Bounding box: min_lon,min_lat,max_lon,max_lat"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Dedicated endpoint for cameras with direct public viewing access (live video streams and recurring snapshot feeds).
+    Includes Rijkswaterstaat motorway cameras, Erasmusbrug, Maastunnel, Euromast, and harbor webcams.
+    """
+    bbox_coords = parse_bbox_param(bbox)
+    cache_key = f"amenities:cameras:live:{district}:{bbox}:{limit}:{offset}"
+    redis = await get_redis_client()
+
+    if redis:
+        try:
+            cached = await redis.get(cache_key)
+            if cached:
+                return Response(content=cached, media_type="application/json")
+        except Exception:
+            pass
+
+    geojson = await query_city_amenities(
+        session=session,
+        subcategory="camera",
+        has_live_feed=True,
         district=district,
         bbox=bbox_coords,
         limit=limit,

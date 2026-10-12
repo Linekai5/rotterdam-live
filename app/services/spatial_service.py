@@ -288,6 +288,7 @@ async def query_city_amenities(
     district: Optional[str] = None,
     wheelchair_accessible: Optional[bool] = None,
     camera_type: Optional[str] = None,
+    has_live_feed: Optional[bool] = None,
     active_only: bool = True,
     bbox: Optional[Tuple[float, float, float, float]] = None,
     limit: int = 200,
@@ -321,6 +322,12 @@ async def query_city_amenities(
         else:
             conditions.append("details->>'camera_type' = :camera_type")
             params["camera_type"] = camera_type
+
+    if has_live_feed is not None:
+        if has_live_feed:
+            conditions.append("(details->>'has_live_feed' = 'true' OR details->>'snapshot_url' IS NOT NULL OR details->>'stream_url' IS NOT NULL)")
+        else:
+            conditions.append("(details->>'has_live_feed' = 'false' OR (details->>'snapshot_url' IS NULL AND details->>'stream_url' IS NULL))")
 
     if wheelchair_accessible is not None:
         if wheelchair_accessible:
