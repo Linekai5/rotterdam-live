@@ -26,6 +26,8 @@ ENV PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
+    osmium-tool \
+    libexpat1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed Python packages from builder

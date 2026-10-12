@@ -14,11 +14,13 @@ Any camera outside Rotterdam boundaries is strictly rejected.
 import json
 import urllib.parse
 from typing import Any, Dict, List, Optional
+import shapely.geometry
 from sqlalchemy import text
 from app.ingestion.base import BaseIngestor
 from app.logging import logger
 from app.db.session import AsyncSessionLocal
 from app.services.spatial_service import find_district_for_point, upsert_city_amenity
+from app.cache.redis_client import get_redis_client
 
 
 class RotterdamCameraHarvester(BaseIngestor):
@@ -894,37 +896,203 @@ class RotterdamCameraHarvester(BaseIngestor):
             },
         ]
 
+    async def get_infrastructure_cameras(self) -> List[Dict[str, Any]]:
+        """
+        Ingest bridge watchman posts (BrugwachtersVerblijven), movable bridges,
+        and tunnel portals from Gemeente Rotterdam ArcGIS REST services.
+        """
+        cameras: List[Dict[str, Any]] = []
+        client = await self.get_client()
+
+        # 1. BrugwachtersVerblijven (Watchman control centers)
+        url_brugwachters = (
+            "https://diensten.rotterdam.nl/arcgis/rest/services/SB_Infra/BrugwachtersVerblijven/MapServer/0/query"
+            "?where=1%3D1&outFields=*&returnGeometry=true&f=geojson&outSR=4326"
+        )
+        try:
+            res = await client.get(url_brugwachters, timeout=8.0)
+            if res.status_code == 200:
+                data = res.json()
+                for feat in data.get("features", []):
+                    geom = feat.get("geometry", {})
+                    coords = geom.get("coordinates", [])
+                    if not coords or len(coords) < 2:
+                        continue
+                    lon, lat = float(coords[0]), float(coords[1])
+                    p = feat.get("properties", {})
+                    obj_id = p.get("ID") or f"{round(lon, 4)}_{round(lat, 4)}"
+                    name = p.get("TEKST4") or f"Brugwachtershuis {p.get('STRAAT', 'Rotterdam')}"
+                    cameras.append({
+                        "id": f"cam-infra-brugwachter-{obj_id}",
+                        "name": f"Infrastructuurcamera: {name}",
+                        "lat": lat,
+                        "lon": lon,
+                        "camera_type": "infrastructure",
+                        "operator": p.get("BEHEERDER") or "Gemeente Rotterdam / Havenbedrijf",
+                        "description": f"Brug- en vaarwegcameratoezicht bij brugwachterspost {name}",
+                        "details_extra": {
+                            "venue_type": "bridge_control_post",
+                            "street": p.get("STRAAT"),
+                            "neighbourhood": p.get("WIJK"),
+                        },
+                    })
+        except Exception as e:
+            logger.warning("Error harvesting BrugwachtersVerblijven: {}", e)
+
+        # 2. Civiele Kunstwerken (Movable bridges and tunnel underpasses)
+        url_civiel = (
+            "https://diensten.rotterdam.nl/arcgis/rest/services/SB_Infra/Civiele_kunstwerken_verkeer/MapServer/0/query"
+            "?where=1%3D1&outFields=*&returnGeometry=true&f=geojson&outSR=4326&resultRecordCount=500"
+        )
+        try:
+            res = await client.get(url_civiel, timeout=8.0)
+            if res.status_code == 200:
+                data = res.json()
+                for feat in data.get("features", []):
+                    p = feat.get("properties", {})
+                    obj_type = (p.get("OBJECTTYPE") or "").lower()
+                    if obj_type not in ("ophaalbrug", "basculebrug", "hefbrug", "onderdoorgang"):
+                        continue
+                    geom = feat.get("geometry", {})
+                    coords = geom.get("coordinates", [])
+                    if not coords:
+                        continue
+                    if geom.get("type") == "Point" and len(coords) >= 2:
+                        lon, lat = float(coords[0]), float(coords[1])
+                    else:
+                        shape = shapely.geometry.shape(geom)
+                        c = shape.centroid
+                        lon, lat = float(c.x), float(c.y)
+                    obj_id = p.get("ID") or p.get("KUNSTWERKCODE") or f"{round(lon, 4)}_{round(lat, 4)}"
+                    kw_name = p.get("KUNSTWERKNAAM") or f"Civiel Kunstwerk {obj_id}"
+                    cameras.append({
+                        "id": f"cam-infra-civiel-{obj_id}",
+                        "name": f"Civiele Bewaking: {kw_name} ({obj_type.capitalize()})",
+                        "lat": lat,
+                        "lon": lon,
+                        "camera_type": "infrastructure",
+                        "operator": p.get("BEHEERDER") or "Gemeente Rotterdam / Stadsbeheer",
+                        "description": f"Camera- en slagboombewaking verkeerskunstwerk {kw_name} ({obj_type})",
+                        "details_extra": {
+                            "venue_type": obj_type,
+                            "construction_year": p.get("AANLEGJAAR"),
+                            "status": p.get("STATUS"),
+                        },
+                    })
+        except Exception as e:
+            logger.warning("Error harvesting Civiele Kunstwerken: {}", e)
+
+        # 3. High-profile fallback bridge and tunnel security cameras
+        cameras.extend([
+            {
+                "id": "cam-infra-erasmusbrug-bediening",
+                "name": "Brugbewaking: Erasmusbrug Centrale Bediening & Slagbomen",
+                "lat": 51.9088,
+                "lon": 4.4840,
+                "camera_type": "infrastructure",
+                "operator": "Gemeente Rotterdam / Havenbedrijf",
+                "description": "Brugdekbewaking, basculekelder en slagboomcamera's Erasmusbrug",
+            },
+            {
+                "id": "cam-infra-willemsbrug-bediening",
+                "name": "Brugbewaking: Willemsbrug Noordelijk Landhoofd",
+                "lat": 51.9175,
+                "lon": 4.4948,
+                "camera_type": "infrastructure",
+                "operator": "Gemeente Rotterdam",
+                "description": "Brugoverzicht en scheepvaartpassage Willemsbrug",
+            },
+            {
+                "id": "cam-infra-koninginnebrug",
+                "name": "Brugbewaking: Koninginnebrug Brugwachtershuis",
+                "lat": 51.9130,
+                "lon": 4.4980,
+                "camera_type": "infrastructure",
+                "operator": "Gemeente Rotterdam",
+                "description": "Basculebrug over de Koningshaven cameratoezicht",
+            },
+            {
+                "id": "cam-infra-maastunnel-ventilatie-noord",
+                "name": "Tunnelbewaking: Maastunnel Noordelijk Ventilatiegebouw",
+                "lat": 51.9062,
+                "lon": 4.4642,
+                "camera_type": "infrastructure",
+                "operator": "Gemeente Rotterdam - Tunnelbedrijf",
+                "description": "Tunnelingang en kadebewaking Maastunnel Parkhaven",
+            },
+            {
+                "id": "cam-infra-maastunnel-ventilatie-zuid",
+                "name": "Tunnelbewaking: Maastunnel Zuidelijk Ventilatiegebouw",
+                "lat": 51.8965,
+                "lon": 4.4578,
+                "camera_type": "infrastructure",
+                "operator": "Gemeente Rotterdam - Tunnelbedrijf",
+                "description": "Tunnelingang en pleintoezicht Maastunnel Charlois",
+            },
+        ])
+
+        logger.info("Harvested {} civil infrastructure cameras", len(cameras))
+        return cameras
+
     def harvest_bulk_cameras(self) -> List[Dict[str, Any]]:
         """
-        Harvest bulk commercial, surveillance, speed camera, ATM, fuel, and retail
+        Harvest bulk commercial, surveillance, transit, ANPR, infrastructure, and general
         cameras from local exported OSM GeoJSON dataset.
         """
         import os
-        geojson_path = "/app/data/cameras_expanded.geojson"
-        if not os.path.exists(geojson_path):
-            geojson_path = "data/cameras_expanded.geojson"
-        if not os.path.exists(geojson_path):
-            logger.warning("Bulk cameras GeoJSON not found at {}; skipping bulk harvest", geojson_path)
+        geojson_path = None
+        for candidate_path in [
+            "/app/data/cameras_master.geojson",
+            "data/cameras_master.geojson",
+            "/app/data/cameras_expanded_v2.geojson",
+            "data/cameras_expanded_v2.geojson",
+            "/app/data/cameras_expanded.geojson",
+            "data/cameras_expanded.geojson",
+        ]:
+            if os.path.exists(candidate_path):
+                geojson_path = candidate_path
+                break
+
+        if not geojson_path:
+            logger.warning("No camera master GeoJSON found; skipping bulk harvest")
             return []
 
         try:
             with open(geojson_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception as e:
-            logger.error("Failed to load bulk camera GeoJSON: {}", e)
+            logger.error("Failed to load bulk camera GeoJSON from {}: {}", geojson_path, e)
             return []
 
         features = data.get("features", [])
-        logger.info("Loaded {} raw features from bulk camera dataset", len(features))
+        logger.info("Loaded {} raw features from bulk camera dataset ({})", len(features), geojson_path)
 
         cameras: List[Dict[str, Any]] = []
         for feat in features:
-            coords = feat.get("geometry", {}).get("coordinates", [])
-            if not coords or len(coords) < 2:
+            geom = feat.get("geometry")
+            if not geom:
                 continue
 
-            lon = float(coords[0])
-            lat = float(coords[1])
+            g_type = geom.get("type")
+            coords = geom.get("coordinates", [])
+            if g_type == "Point":
+                if not coords or len(coords) < 2:
+                    continue
+                lon = float(coords[0])
+                lat = float(coords[1])
+            else:
+                try:
+                    shape = shapely.geometry.shape(geom)
+                    c = shape.centroid
+                    lon = float(c.x)
+                    lat = float(c.y)
+                except Exception:
+                    continue
+
+            # Bounding box pre-filter for greater Rotterdam region
+            if not (4.30 <= lon <= 4.65 and 51.85 <= lat <= 52.02):
+                continue
+
             node_id = str(feat.get("id", f"{round(lon, 6)}_{round(lat, 6)}"))
             props = feat.get("properties", {})
 
@@ -932,13 +1100,16 @@ class RotterdamCameraHarvester(BaseIngestor):
             if props.get("indoor") in ("yes", "true") or props.get("location") == "indoor":
                 continue
 
+            amenity = props.get("amenity")
+            shop = props.get("shop")
+            highway = props.get("highway")
+            railway = props.get("railway")
+            tourism = props.get("tourism")
             man_made = props.get("man_made")
             surveillance = props.get("surveillance")
             camera_type_tag = props.get("camera:type")
             surveillance_type = props.get("surveillance:type")
-            highway = props.get("highway")
-            amenity = props.get("amenity")
-            shop = props.get("shop")
+            cctv = props.get("cctv")
 
             name = props.get("name")
             brand = props.get("brand") or props.get("operator")
@@ -947,56 +1118,130 @@ class RotterdamCameraHarvester(BaseIngestor):
             postcode = props.get("addr:postcode", "")
             address = f"{street} {number}".strip() if street else None
 
-            # Determine category, venue, and operator
-            camera_type = "commercial"
-            venue_type = "commercial"
-            operator = brand or "Particulier / Bedrijf"
+            # Filter out bare street parking spaces (keep garages, multi-storey, or named facilities)
+            if amenity == "parking":
+                p_type = props.get("parking")
+                if p_type not in ("multi-storey", "underground", "garage") and not bool(name):
+                    continue
 
-            if highway == "speed_camera":
+            is_mandated = False
+
+            if highway == "speed_camera" or man_made == "speed_trap":
                 camera_type = "anpr"
                 venue_type = "speed_enforcement"
                 operator = "Openbaar Ministerie / Politie"
                 name = name or "Snelheids- & Roodlichtcamera (Flitspaal)"
                 desc = "Vaste digitale flitspaal voor snelheids- en verkeerslichtcontrole"
-            elif man_made == "surveillance" or surveillance or camera_type_tag or surveillance_type:
+
+            elif railway in ("station", "subway_entrance", "halt"):
+                camera_type = "transit"
+                venue_type = f"transit_{railway}"
+                operator = props.get("operator") or ("RET Rotterdam" if railway == "subway_entrance" else "NS Veiligheid / ProRail")
+                if railway == "subway_entrance":
+                    name = name or f"RET Metrostation Toegangscamera ({props.get('network') or 'Rotterdam Metro'})"
+                    desc = f"Toegangs- en tourniquettoezicht metrostation {address or 'Rotterdam'}"
+                else:
+                    name = name or f"Spoorstation Cameratoezicht: {props.get('railway:station:name') or 'Station'}"
+                    desc = f"CCTV stationsbeveiliging en perronmonitoring {operator}"
+
+            elif amenity in ("police", "courthouse", "townhall"):
+                camera_type = "surveillance"
+                venue_type = f"civic_{amenity}"
+                operator = "Gemeente Rotterdam / Politie"
+                civic_names = {"police": "Politiebureau", "courthouse": "Rechtbank Rotterdam", "townhall": "Stadskantoor / Stadhuis"}
+                name = name or f"Perimeterbeveiliging: {civic_names.get(amenity, 'Overheidsgebouw')}"
+                desc = f"Buitenbewaking en gevelcameratoezicht {civic_names.get(amenity, 'overheidslocatie')}"
+
+            elif man_made == "surveillance" or surveillance or camera_type_tag or surveillance_type or cctv == "yes":
                 camera_type = "surveillance"
                 venue_type = "public_security"
                 operator = props.get("operator") or "Gemeente Rotterdam / Politie"
                 zone = props.get("surveillance:zone") or "openbare ruimte"
                 name = name or f"Toezichtcamera: {zone.title()}"
                 desc = f"Beveiligingscamera op openbare ruimte: {camera_type_tag or surveillance_type or 'CCTV'}"
+
             elif amenity == "atm":
                 camera_type = "commercial"
                 venue_type = "atm"
                 operator = brand or "Geldmaat"
                 name = name or f"Geldautomaat Beveiligingscamera ({operator})"
                 desc = f"24/7 cameratoezicht bij geldautomaat {operator} - {address or 'Rotterdam'}"
+
             elif amenity == "fuel":
                 camera_type = "commercial"
                 venue_type = "fuel_station"
                 operator = brand or "Tankstation"
                 name = name or f"Tankstation Beveiligingscamera: {operator}"
                 desc = f"Forecourt en terreinbeveiliging tankstation {operator}"
-            elif amenity == "bank":
+
+            elif amenity in ("bank", "bureau_de_change"):
                 camera_type = "commercial"
-                venue_type = "bank"
-                operator = brand or "Bankkantoor"
-                name = name or f"Bank Beveiligingscamera: {operator}"
-                desc = f"Toegangs- en gevelbeveiliging bankfiliaal {operator}"
-            elif amenity == "parking":
+                venue_type = "financial_institution"
+                operator = brand or ("Grenswisselkantoor" if amenity == "bureau_de_change" else "Bankkantoor")
+                name = name or f"{operator} Beveiligingscamera"
+                desc = f"Toegangs- en gevelbeveiliging financieel filiaal {operator}"
+                if amenity == "bureau_de_change":
+                    is_mandated = True
+
+            elif amenity in ("parking", "parking_entrance"):
                 camera_type = "commercial"
                 venue_type = "parking_facility"
-                operator = brand or "Parkeerbeheer"
+                operator = brand or props.get("operator") or "Parkeerbeheer"
                 name = name or f"Parkeergarage Cameratoezicht: {operator}"
                 desc = f"Slagboom- en terreinbewakingscamera {operator}"
-            elif shop in ("supermarket", "department_store", "mall"):
+
+            elif amenity in ("casino", "gambling"):
                 camera_type = "commercial"
-                venue_type = shop
+                venue_type = "mandated_casino"
+                operator = brand or "Casino / Speelautomatenhal"
+                name = name or f"Casino Beveiligingscamera: {operator}"
+                desc = f"Wettelijk verplicht buitencameratoezicht speelautomatenhal / casino (APV Rotterdam)"
+                is_mandated = True
+
+            elif shop in ("jewelry", "coffee_shop", "convenience"):
+                camera_type = "commercial"
+                venue_type = f"mandated_{shop}"
+                shop_names = {"jewelry": "Juwelier", "coffee_shop": "Coffeeshop", "convenience": "Avondwinkel / Gemakswinkel"}
+                operator = brand or shop_names.get(shop, "Onderneming")
+                name = name or f"{shop_names.get(shop, 'Winkel')} Beveiligingscamera: {operator}"
+                desc = f"Wettelijk verplichte gevel- en entreecamera {shop_names.get(shop, 'winkel')} conform APV Rotterdam veiligheidseis"
+                is_mandated = True
+
+            elif shop in ("supermarket", "department_store", "mall", "electronics", "alcohol", "car"):
+                camera_type = "commercial"
+                venue_type = f"retail_{shop}"
                 operator = brand or shop.title()
                 name = name or f"Winkelbeveiligingscamera: {operator}"
-                desc = f"Gevel- en entreecameratoezicht {operator}"
+                desc = f"Gevel- en entreecameratoezicht retailvestiging {operator}"
+
+            elif amenity == "pharmacy":
+                camera_type = "commercial"
+                venue_type = "pharmacy"
+                operator = brand or "Apotheek"
+                name = name or f"Apotheek Beveiligingscamera: {operator}"
+                desc = f"Toegangs- en nachtloket cameratoezicht apotheek {operator}"
+
+            elif tourism == "hotel":
+                camera_type = "commercial"
+                venue_type = "hotel"
+                operator = brand or "Hotel"
+                name = name or f"Hotel Beveiligingscamera: {operator}"
+                desc = f"Entree- en gevelcameratoezicht hotel {operator}"
+
+            elif tourism == "viewpoint":
+                camera_type = "skyline_webcam"
+                venue_type = "viewpoint_panorama"
+                operator = "Rotterdam Toerisme / Havenbedrijf"
+                name = name or "Panoramisch Uitzichtpunt Camera"
+                desc = "Uitzichtpunt en skyline observatiepunt"
+
             else:
-                continue
+                # General / Unclassified camera fallback
+                camera_type = "general"
+                venue_type = "general_camera"
+                operator = brand or props.get("operator") or "Openbare Ruimte / Bedrijf"
+                name = name or f"Camera Rotterdam: {operator}"
+                desc = f"Outdoor camerafaciliteit in Rotterdam ({address or 'openbare ruimte'})"
 
             cameras.append({
                 "id": f"cam-osm-{node_id}",
@@ -1013,6 +1258,7 @@ class RotterdamCameraHarvester(BaseIngestor):
                     "brand": brand,
                     "address": address,
                     "postcode": postcode,
+                    "is_mandated": is_mandated,
                     "opening_hours": props.get("opening_hours"),
                     "wheelchair": props.get("wheelchair"),
                     "phone": props.get("phone"),
@@ -1021,31 +1267,37 @@ class RotterdamCameraHarvester(BaseIngestor):
                 },
             })
 
-        logger.info("Successfully mapped {} bulk cameras from OSM dataset", len(cameras))
+        logger.info("Successfully mapped {} bulk cameras from OSM master dataset", len(cameras))
         return cameras
 
     async def ingest(self) -> Dict[str, int]:
         """
         Harvest all outdoor cameras and validate strictly against Rotterdam boundaries.
-        Returns breakdown of saved cameras.
+        Returns breakdown of saved cameras across all structured categories.
         """
         logger.info("Starting dedicated Rotterdam Outdoor Camera Harvester...")
 
-        # 1. Collect all candidates
+        # 1. Collect all candidates across all pipelines
         traffic_cams = self.get_traffic_cameras()
         mun_cams = self.get_municipal_surveillance_cameras()
         webcams = self.get_public_webcams()
         anpr_cams = self.get_anpr_enforcement_cameras()
+        infra_cams = await self.get_infrastructure_cameras()
         bulk_cams = self.harvest_bulk_cameras()
 
-        all_candidates = traffic_cams + mun_cams + webcams + anpr_cams + bulk_cams
+        all_candidates = traffic_cams + mun_cams + webcams + anpr_cams + infra_cams + bulk_cams
         logger.info("Discovered {} total candidate cameras across all feeds", len(all_candidates))
 
-        saved_traffic = 0
-        saved_surveillance = 0
-        saved_webcam = 0
-        saved_anpr = 0
-        saved_commercial = 0
+        saved_counts = {
+            "commercial": 0,
+            "surveillance": 0,
+            "traffic": 0,
+            "anpr": 0,
+            "transit": 0,
+            "infrastructure": 0,
+            "skyline_webcam": 0,
+            "general": 0,
+        }
         rejected_outside = 0
 
         async with AsyncSessionLocal() as session:
@@ -1059,7 +1311,9 @@ class RotterdamCameraHarvester(BaseIngestor):
                     rejected_outside += 1
                     continue
 
-                cam_type = cam.get("camera_type", "surveillance")
+                cam_type = cam.get("camera_type", "general")
+                if cam_type not in saved_counts:
+                    cam_type = "general"
 
                 details = {
                     "camera_type": cam_type,
@@ -1091,29 +1345,36 @@ class RotterdamCameraHarvester(BaseIngestor):
                 }
 
                 if await upsert_city_amenity(amenity_dict, session):
-                    if cam_type == "traffic":
-                        saved_traffic += 1
-                    elif cam_type == "surveillance":
-                        saved_surveillance += 1
-                    elif cam_type == "skyline_webcam":
-                        saved_webcam += 1
-                    elif cam_type == "anpr":
-                        saved_anpr += 1
-                    elif cam_type == "commercial":
-                        saved_commercial += 1
+                    saved_counts[cam_type] += 1
 
-        total_saved = saved_traffic + saved_surveillance + saved_webcam + saved_anpr + saved_commercial
+        total_saved = sum(saved_counts.values())
         logger.info(
-            "Rotterdam Camera Harvester complete: {} outdoor cameras saved ({} commercial, {} police/public surveillance, {} traffic, {} ANPR/speed, {} webcams). {} rejected outside Rotterdam.",
-            total_saved, saved_commercial, saved_surveillance, saved_traffic, saved_anpr, saved_webcam, rejected_outside,
+            "Rotterdam Camera Harvester complete: {} outdoor cameras saved: {}",
+            total_saved,
+            saved_counts,
         )
 
+        # Invalidate Redis cache for cameras
+        try:
+            redis = await get_redis_client()
+            if redis:
+                keys = await redis.keys("amenities:cameras*")
+                if keys:
+                    await redis.delete(*keys)
+                    logger.info("Invalidated {} Redis camera cache entries", len(keys))
+        except Exception as e:
+            logger.debug("Redis cache invalidation skipped: {}", e)
+
         return {
-            "commercial_cameras": saved_commercial,
-            "police_surveillance": saved_surveillance,
-            "traffic_cameras": saved_traffic,
-            "anpr_enforcement": saved_anpr,
-            "skyline_webcams": saved_webcam,
-            "rejected_outside_rotterdam": rejected_outside,
             "total_cameras": total_saved,
+            "commercial_cameras": saved_counts["commercial"],
+            "police_surveillance": saved_counts["surveillance"],
+            "transit_cameras": saved_counts["transit"],
+            "traffic_cameras": saved_counts["traffic"],
+            "anpr_enforcement": saved_counts["anpr"],
+            "infrastructure_cameras": saved_counts["infrastructure"],
+            "skyline_webcams": saved_counts["skyline_webcam"],
+            "general_cameras": saved_counts["general"],
+            "rejected_outside_rotterdam": rejected_outside,
         }
+

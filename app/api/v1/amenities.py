@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db, parse_bbox_param
 from app.cache.redis_client import get_redis_client
 from app.schemas.geojson import GeoJSONFeatureCollection
-from app.services.spatial_service import query_city_amenities
+from app.services.spatial_service import query_city_amenities, get_camera_statistics
 from app.logging import logger
 
 router = APIRouter(prefix="/amenities", tags=["Municipal Amenities"])
@@ -107,22 +107,50 @@ async def get_public_toilets(
     return geojson
 
 
+@router.get("/cameras/stats")
+async def get_camera_stats(
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Get aggregated counts of verified cameras in Rotterdam across all structured categories and districts.
+    """
+    cache_key = "amenities:cameras:stats"
+    redis = await get_redis_client()
+    if redis:
+        try:
+            cached = await redis.get(cache_key)
+            if cached:
+                return Response(content=cached, media_type="application/json")
+        except Exception:
+            pass
+
+    stats = await get_camera_statistics(session)
+    stats_json = json.dumps(stats)
+    if redis:
+        try:
+            await redis.setex(cache_key, 3600, stats_json)
+        except Exception:
+            pass
+
+    return Response(content=stats_json, media_type="application/json")
+
+
 @router.get("/cameras", response_model=GeoJSONFeatureCollection)
 async def get_surveillance_cameras(
     camera_type: Optional[str] = Query(
         None,
-        description="Filter by camera type: commercial, surveillance, traffic, skyline_webcam, anpr",
+        description="Filter by category: commercial, surveillance, traffic, anpr, transit, infrastructure, skyline_webcam, general",
     ),
-    district: Optional[str] = Query(None, description="Filter by district"),
+    district: Optional[str] = Query(None, description="Filter by Rotterdam district"),
     bbox: Optional[str] = Query(None, description="Bounding box: min_lon,min_lat,max_lon,max_lat"),
-    limit: int = Query(500, ge=1, le=2500),
+    limit: int = Query(500, ge=1, le=5000),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_db),
 ):
     """
-    Public and commercial outdoor camera infrastructure across Rotterdam:
-    Includes commercial company security (retail, banks, ATMs, parking, fuel),
-    police surveillance (Art. 151c), RWS traffic cameras, skyline webcams, and ANPR.
+    Unified camera endpoint for Rotterdam outdoor and commercial security cameras.
+    Returns strict RFC 7946 GeoJSON FeatureCollection with sub-millisecond PostGIS GiST filtering.
+    If camera_type is omitted, all verified cameras across all categories are returned.
     """
     bbox_coords = parse_bbox_param(bbox)
     cache_key = f"amenities:cameras:{camera_type}:{district}:{bbox}:{limit}:{offset}"
@@ -153,6 +181,180 @@ async def get_surveillance_cameras(
             pass
 
     return geojson
+
+
+@router.get("/cameras/general", response_model=GeoJSONFeatureCollection)
+async def get_general_cameras(
+    district: Optional[str] = Query(None, description="Filter by district"),
+    bbox: Optional[str] = Query(None, description="Bounding box: min_lon,min_lat,max_lon,max_lat"),
+    limit: int = Query(500, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    General endpoint for unclassified or generic outdoor cameras across Rotterdam.
+    """
+    bbox_coords = parse_bbox_param(bbox)
+    cache_key = f"amenities:cameras:general:{district}:{bbox}:{limit}:{offset}"
+    redis = await get_redis_client()
+
+    if redis:
+        try:
+            cached = await redis.get(cache_key)
+            if cached:
+                return Response(content=cached, media_type="application/json")
+        except Exception:
+            pass
+
+    geojson = await query_city_amenities(
+        session=session,
+        subcategory="camera",
+        camera_type="general",
+        district=district,
+        bbox=bbox_coords,
+        limit=limit,
+        offset=offset,
+    )
+
+    if redis:
+        try:
+            await redis.setex(cache_key, 7200, geojson.model_dump_json())
+        except Exception:
+            pass
+
+    return geojson
+
+
+@router.get("/cameras/commercial", response_model=GeoJSONFeatureCollection)
+async def get_commercial_cameras(
+    district: Optional[str] = Query(None, description="Filter by district"),
+    bbox: Optional[str] = Query(None, description="Bounding box: min_lon,min_lat,max_lon,max_lat"),
+    limit: int = Query(500, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Commercial company security cameras (supermarkets, retail malls, banks, ATMs, parking garages, fuel stations, and APV mandated high-risk stores).
+    """
+    return await query_city_amenities(
+        session=session,
+        subcategory="camera",
+        camera_type="commercial",
+        district=district,
+        bbox=parse_bbox_param(bbox),
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/cameras/surveillance", response_model=GeoJSONFeatureCollection)
+async def get_police_surveillance_cameras(
+    district: Optional[str] = Query(None, description="Filter by district"),
+    bbox: Optional[str] = Query(None, description="Bounding box: min_lon,min_lat,max_lon,max_lat"),
+    limit: int = Query(500, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Police and municipal surveillance camera poles (Article 151c Gemeentewet and public security CCTV).
+    """
+    return await query_city_amenities(
+        session=session,
+        subcategory="camera",
+        camera_type="surveillance",
+        district=district,
+        bbox=parse_bbox_param(bbox),
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/cameras/transit", response_model=GeoJSONFeatureCollection)
+async def get_transit_cameras(
+    district: Optional[str] = Query(None, description="Filter by district"),
+    bbox: Optional[str] = Query(None, description="Bounding box: min_lon,min_lat,max_lon,max_lat"),
+    limit: int = Query(500, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    RET Metro station access portals, train station hubs, and secure transport facility cameras.
+    """
+    return await query_city_amenities(
+        session=session,
+        subcategory="camera",
+        camera_type="transit",
+        district=district,
+        bbox=parse_bbox_param(bbox),
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/cameras/traffic", response_model=GeoJSONFeatureCollection)
+async def get_traffic_monitoring_cameras(
+    district: Optional[str] = Query(None, description="Filter by district"),
+    bbox: Optional[str] = Query(None, description="Bounding box: min_lon,min_lat,max_lon,max_lat"),
+    limit: int = Query(500, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Rijkswaterstaat and municipal arterial traffic flow monitoring cameras (A13, A15, A16, A20, S100 ring, tunnels).
+    """
+    return await query_city_amenities(
+        session=session,
+        subcategory="camera",
+        camera_type="traffic",
+        district=district,
+        bbox=parse_bbox_param(bbox),
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/cameras/anpr", response_model=GeoJSONFeatureCollection)
+async def get_anpr_cameras(
+    district: Optional[str] = Query(None, description="Filter by district"),
+    bbox: Optional[str] = Query(None, description="Bounding box: min_lon,min_lat,max_lon,max_lat"),
+    limit: int = Query(500, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Speed enforcement cameras (flitspalen), flexflitsers, and low-emission zone (milieuzone) ANPR portals.
+    """
+    return await query_city_amenities(
+        session=session,
+        subcategory="camera",
+        camera_type="anpr",
+        district=district,
+        bbox=parse_bbox_param(bbox),
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/cameras/infrastructure", response_model=GeoJSONFeatureCollection)
+async def get_infrastructure_cameras(
+    district: Optional[str] = Query(None, description="Filter by district"),
+    bbox: Optional[str] = Query(None, description="Bounding box: min_lon,min_lat,max_lon,max_lat"),
+    limit: int = Query(500, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Bridge watchman posts (BrugwachtersVerblijven), movable bridges, lock complexes, and tunnel portals.
+    """
+    return await query_city_amenities(
+        session=session,
+        subcategory="camera",
+        camera_type="infrastructure",
+        district=district,
+        bbox=parse_bbox_param(bbox),
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/water-taps", response_model=GeoJSONFeatureCollection)

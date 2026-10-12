@@ -313,8 +313,14 @@ async def query_city_amenities(
         conditions.append("is_active = true")
 
     if camera_type:
-        conditions.append("details->>'camera_type' = :camera_type")
-        params["camera_type"] = camera_type
+        if camera_type.lower() == "general":
+            conditions.append(
+                "(details->>'camera_type' = 'general' OR details->>'camera_type' IS NULL OR "
+                "details->>'camera_type' NOT IN ('commercial', 'surveillance', 'traffic', 'anpr', 'transit', 'infrastructure', 'skyline_webcam'))"
+            )
+        else:
+            conditions.append("details->>'camera_type' = :camera_type")
+            params["camera_type"] = camera_type
 
     if wheelchair_accessible is not None:
         if wheelchair_accessible:
@@ -393,9 +399,48 @@ async def query_city_amenities(
         )
 
         features.append(GeoJSONFeature(type="Feature", geometry=geometry, properties=properties))
-
+ 
     return GeoJSONFeatureCollection(
         type="FeatureCollection",
         features=features,
         total_count=len(features),
     )
+
+
+async def get_camera_statistics(session: AsyncSession) -> Dict[str, Any]:
+    """
+    Retrieve aggregated counts of verified cameras across categories and districts in Rotterdam.
+    """
+    stmt_cat = text("""
+        SELECT 
+            CASE 
+                WHEN details->>'camera_type' IN ('commercial', 'surveillance', 'traffic', 'anpr', 'transit', 'infrastructure', 'skyline_webcam') 
+                    THEN details->>'camera_type'
+                ELSE 'general'
+            END as ctype,
+            COUNT(*) as count
+        FROM city_amenities
+        WHERE subcategory = 'camera' AND is_active = true
+        GROUP BY ctype
+        ORDER BY count DESC;
+    """)
+    res_cat = await session.execute(stmt_cat)
+    categories = {row[0]: row[1] for row in res_cat.fetchall()}
+
+    stmt_dist = text("""
+        SELECT COALESCE(district, 'Onbekend') as dist, COUNT(*) as count
+        FROM city_amenities
+        WHERE subcategory = 'camera' AND is_active = true
+        GROUP BY dist
+        ORDER BY count DESC;
+    """)
+    res_dist = await session.execute(stmt_dist)
+    districts = {row[0]: row[1] for row in res_dist.fetchall()}
+
+    total = sum(categories.values())
+    return {
+        "total_cameras": total,
+        "categories": categories,
+        "districts": districts,
+    }
+
