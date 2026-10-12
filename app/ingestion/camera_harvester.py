@@ -1108,6 +1108,7 @@ class RotterdamCameraHarvester(BaseIngestor):
             man_made = props.get("man_made")
             surveillance = props.get("surveillance")
             camera_type_tag = props.get("camera:type")
+            barrier = props.get("barrier")
             surveillance_type = props.get("surveillance:type")
             cctv = props.get("cctv")
 
@@ -1207,7 +1208,23 @@ class RotterdamCameraHarvester(BaseIngestor):
                 desc = f"Wettelijk verplichte gevel- en entreecamera {shop_names.get(shop, 'winkel')} conform APV Rotterdam veiligheidseis"
                 is_mandated = True
 
-            elif shop in ("supermarket", "department_store", "mall", "electronics", "alcohol", "car"):
+            elif barrier in ("gate", "turnstile", "entrance", "bollard", "toll_booth"):
+                camera_type = "infrastructure"
+                venue_type = f"security_{barrier}"
+                operator = brand or props.get("operator") or "Haven- & Toegangsbeveiliging"
+                name = name or f"Toegangs- & Slagboomcamera ({barrier.capitalize()})"
+                desc = f"Toegangscontrole en terreinbewakingscamera bij {barrier} ({address or 'Rotterdam'})"
+
+            elif amenity in ("nightclub", "bar", "pub", "fast_food", "restaurant"):
+                camera_type = "commercial"
+                venue_type = f"hospitality_{amenity}"
+                operator = brand or props.get("operator") or name or "Horecavestiging"
+                name = name or f"{amenity.capitalize()} Beveiligingscamera: {operator}"
+                desc = f"Entree- en gevelcameratoezicht horecalocatie {operator}"
+                if amenity in ("nightclub", "bar", "pub"):
+                    is_mandated = True
+
+            elif shop in ("supermarket", "department_store", "mall", "electronics", "alcohol", "car", "clothes", "chemist", "optician", "shoes", "bakery", "sports"):
                 camera_type = "commercial"
                 venue_type = f"retail_{shop}"
                 operator = brand or shop.title()
