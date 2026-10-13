@@ -86,14 +86,14 @@ jobs:
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libpq-dev libexpat1
+          sudo apt-get install -y libpq-dev libexpat1 postgresql-client
 
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Database Initialization
+      - name: Run Database Initialization & Seed Fixtures
         env:
           PYTHONPATH: .
           DATABASE_URL: postgresql+asyncpg://postgres:rotterdamlive_secret_2026@127.0.0.1:5432/rotterdamlive
@@ -102,6 +102,10 @@ jobs:
           ENVIRONMENT: testing
         run: |
           python scripts/init_db.py
+          if [ -f tests/fixtures/ci_seed.sql.gz ]; then
+            echo "Loading CI test seed dataset..."
+            gunzip -c tests/fixtures/ci_seed.sql.gz | PGPASSWORD=rotterdamlive_secret_2026 psql -h 127.0.0.1 -U postgres -d rotterdamlive
+          fi
 
       - name: Execute Pytest Suite (Sub-30ms SLA Verification)
         env:

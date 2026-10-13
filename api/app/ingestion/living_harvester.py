@@ -855,19 +855,19 @@ class RotterdamLivingHarvester(BaseIngestor):
                     )
                     ON CONFLICT (id) DO UPDATE SET
                         district_name = EXCLUDED.district_name,
-                        total_residential_units = EXCLUDED.total_residential_units,
-                        avg_surface_area_m2 = EXCLUDED.avg_surface_area_m2,
-                        median_surface_area_m2 = EXCLUDED.median_surface_area_m2,
-                        min_surface_area_m2 = EXCLUDED.min_surface_area_m2,
-                        max_surface_area_m2 = EXCLUDED.max_surface_area_m2,
-                        pre_war_count = EXCLUDED.pre_war_count,
-                        pre_war_pct = EXCLUDED.pre_war_pct,
-                        post_war_count = EXCLUDED.post_war_count,
-                        post_war_pct = EXCLUDED.post_war_pct,
-                        late_20th_count = EXCLUDED.late_20th_count,
-                        late_20th_pct = EXCLUDED.late_20th_pct,
-                        modern_count = EXCLUDED.modern_count,
-                        modern_pct = EXCLUDED.modern_pct,
+                        total_residential_units = COALESCE(NULLIF(EXCLUDED.total_residential_units, 0), district_housing_metrics.total_residential_units),
+                        avg_surface_area_m2 = COALESCE(EXCLUDED.avg_surface_area_m2, district_housing_metrics.avg_surface_area_m2),
+                        median_surface_area_m2 = COALESCE(EXCLUDED.median_surface_area_m2, district_housing_metrics.median_surface_area_m2),
+                        min_surface_area_m2 = COALESCE(EXCLUDED.min_surface_area_m2, district_housing_metrics.min_surface_area_m2),
+                        max_surface_area_m2 = COALESCE(EXCLUDED.max_surface_area_m2, district_housing_metrics.max_surface_area_m2),
+                        pre_war_count = COALESCE(NULLIF(EXCLUDED.pre_war_count, 0), district_housing_metrics.pre_war_count),
+                        pre_war_pct = COALESCE(NULLIF(EXCLUDED.pre_war_pct, 0.0), district_housing_metrics.pre_war_pct),
+                        post_war_count = COALESCE(NULLIF(EXCLUDED.post_war_count, 0), district_housing_metrics.post_war_count),
+                        post_war_pct = COALESCE(NULLIF(EXCLUDED.post_war_pct, 0.0), district_housing_metrics.post_war_pct),
+                        late_20th_count = COALESCE(NULLIF(EXCLUDED.late_20th_count, 0), district_housing_metrics.late_20th_count),
+                        late_20th_pct = COALESCE(NULLIF(EXCLUDED.late_20th_pct, 0.0), district_housing_metrics.late_20th_pct),
+                        modern_count = COALESCE(NULLIF(EXCLUDED.modern_count, 0), district_housing_metrics.modern_count),
+                        modern_pct = COALESCE(NULLIF(EXCLUDED.modern_pct, 0.0), district_housing_metrics.modern_pct),
                         average_woz_value = EXCLUDED.average_woz_value,
                         owner_occupied_pct = EXCLUDED.owner_occupied_pct,
                         social_rent_pct = EXCLUDED.social_rent_pct,
@@ -876,7 +876,11 @@ class RotterdamLivingHarvester(BaseIngestor):
                         safety_index = EXCLUDED.safety_index,
                         physical_index = EXCLUDED.physical_index,
                         social_index = EXCLUDED.social_index,
-                        amenity_counts = EXCLUDED.amenity_counts,
+                        amenity_counts = CASE 
+                            WHEN EXCLUDED.amenity_counts IS NULL OR EXCLUDED.amenity_counts::text = '{}'::text 
+                            THEN district_housing_metrics.amenity_counts 
+                            ELSE EXCLUDED.amenity_counts 
+                        END,
                         updated_at = NOW();
                 """)
 
