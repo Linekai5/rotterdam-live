@@ -1,7 +1,7 @@
 # Rotterdam Live API — Master Architectural Specification & Implementation Status
 
 > [!NOTE]
-> **Platform Version:** 1.6.0 (Complete System Implementation & Integration Status)  
+> **Platform Version:** 1.7.0 (The /living Domain: Demographics, Housing Analytics & District Passports)  
 > **Environment:** Hetzner Cloud Linux VPS (Rotterdam Dockerized Stack)  
 > **Backend Repository:** [`github.com/Linekai5/rotterdam-live-api`](https://github.com/Linekai5/rotterdam-live-api) (Private, main branch synced)  
 > **Frontend Repository:** [`github.com/Linekai5/Rott-live`](https://github.com/Linekai5/Rott-live) (Private, main branch synced)  
@@ -323,6 +323,15 @@ All endpoints return RFC 7946 GeoJSON or structured JSON. Responses are cached i
 | `/api/v1/spatial/districts` | `GET` | Canonical CBS/PDOK polygons of the 19 Rotterdam municipal districts. |
 | `/health/live` & `/health/ready` | `GET` | Kubernetes / Docker liveness and PostgreSQL + Redis readiness probes. |
 
+### G. Demographics, Housing & District Passports (`/api/v1/living`)
+
+| Endpoint | Method | Description | Cache TTL |
+| :--- | :--- | :--- | :--- |
+| `/api/v1/living/demographics` | `GET` | Demographic profiles across all 19 districts (population, density, age cohorts 0-14 to 65+, households, avg income). Filterable by `district`. | 3600s (1h) |
+| `/api/v1/living/demographics/overview` | `GET` | High-level municipal totals: 673k pop, 348k BAG residential stock, overall density, city-wide age breakdown, household structure. | 3600s (1h) |
+| `/api/v1/living/housing` | `GET` | Housing analytics per district: residential units, avg/median surface area (m²), construction eras (<1945, 1945-69, 1970-99, 2000+), WOZ values, tenure split (koop vs. social vs. private rent), and civic amenity densities. | 3600s (1h) |
+| `/api/v1/living/districts/{district_name}/passport` | `GET` | **Unified District Passport**: Consolidated RFC 7946 GeoJSON Feature returning MultiPolygon district geometry + demographics, housing, amenities, and Wijkprofiel livability indices. Resolves by code or alias (`Centrum`, `Feijenoord`, `WK059901`). | 3600s (1h) |
+
 ---
 
 ## 7. Background Worker Scheduling Matrix
@@ -424,28 +433,29 @@ async function searchAddresses(query) {
 
 ## 9. Automated Test Suite & Quality Assurance
 
-All 39 automated tests run inside the container with clean connection pooling and event loop isolation (`tests/conftest.py`):
+All 47 automated tests run inside the container with clean connection pooling and event loop isolation (`tests/conftest.py`):
 
 ```text
 ============================= test session starts ==============================
 rootdir: /app, configfile: pyproject.toml, testpaths: tests
 plugins: anyio-4.15.1, asyncio-1.4.0
 
-tests/test_addresses.py .....                                            [ 12%]
-tests/test_api_endpoints.py ....                                         [ 23%]
-tests/test_geocoding.py ....                                             [ 33%]
-tests/test_ingestion_parsers.py ...                                      [ 41%]
-tests/test_live_ingestion_smoke.py .....                                 [ 53%]
-tests/test_retail.py .....                                               [ 66%]
-tests/test_schemas.py ...                                                [ 74%]
-tests/test_search.py ...                                                 [ 82%]
+tests/test_addresses.py .....                                            [ 10%]
+tests/test_api_endpoints.py ....                                         [ 19%]
+tests/test_geocoding.py ....                                             [ 27%]
+tests/test_ingestion_parsers.py ...                                      [ 34%]
+tests/test_live_ingestion_smoke.py .....                                 [ 44%]
+tests/test_living.py ........                                            [ 61%]
+tests/test_retail.py .....                                               [ 72%]
+tests/test_schemas.py ...                                                [ 78%]
+tests/test_search.py ...                                                 [ 85%]
 tests/test_weather.py .......                                            [100%]
 
-============================== 39 passed in 1.55s ==============================
+============================== 47 passed in 4.87s ==============================
 ```
 
-* **Pass Rate:** **100% (39 passed, 0 failed, 0 warnings)**
-* **Execution Time:** ~1.55 seconds
+* **Pass Rate:** **100% (47 passed, 0 failed, 0 warnings)**
+* **Execution Time:** ~4.87 seconds
 
 ---
 
