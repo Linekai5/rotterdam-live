@@ -1,5 +1,5 @@
 <script>
-  import { switchStyle, toggleLabels, toggle3DBuildings, resetView, filterLiveEvents } from './map.js';
+  import { switchStyle, toggleLabels, toggle3DBuildings, resetView, filterLiveEvents, setTrafficVisibility } from './map.js';
 
   export let map = null;
 
@@ -11,6 +11,7 @@
 
   let showEmergency = true;
   let showMobility = true;
+  let showTraffic = true;
   let showEnvironment = true;
   let showNews = true;
 
@@ -49,6 +50,12 @@
     if (showEnvironment) active.push('environment');
     if (showNews) active.push('news');
     filterLiveEvents(map, active);
+  }
+
+  function handleTrafficChange() {
+    if (map) {
+      setTrafficVisibility(map, showTraffic);
+    }
   }
 </script>
 
@@ -158,6 +165,16 @@
         />
         <span class="cat-dot" style="background-color: #3b82f6;"></span>
         <span class="toggle-text">Mobility & Parking</span>
+      </label>
+
+      <label class="toggle-row">
+        <input 
+          type="checkbox" 
+          bind:checked={showTraffic} 
+          on:change={handleTrafficChange} 
+        />
+        <span class="cat-dot" style="background-color: #f97316;"></span>
+        <span class="toggle-text">Live Verkeer & Ring (NDW)</span>
       </label>
 
       <label class="toggle-row">
