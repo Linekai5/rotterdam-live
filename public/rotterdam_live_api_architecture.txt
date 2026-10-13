@@ -552,5 +552,5 @@ tests/test_weather.py .......                                            [100%]
 ## 10. Repository & Git Status
 
 * **Backend Repository:** [`github.com/Linekai5/rotterdam-live-api`](https://github.com/Linekai5/rotterdam-live-api) (Private, `main` branch, commit `fdda50d`)
-* **Frontend Repository:** [`github.com/Linekai5/Rott-live`](https://github.com/Linekai5/Rott-live) (Private, `main` branch, commit `da67530`)
+* **Frontend Repository:** [`github.com/Linekai5/Rott-live`](https://github.com/Linekai5/Rott-live) (Private, `main` branch, commit `025d3aa`)
 * **Working Tree:** Both repositories are clean and pushed to `origin main`.
