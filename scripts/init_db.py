@@ -65,6 +65,27 @@ async def init_database():
         await conn.execute(
             text("CREATE INDEX IF NOT EXISTS idx_district_housing_name ON district_housing_metrics (district_name);")
         )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_rotterdam_events_geom ON rotterdam_events USING GIST (geom);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_rotterdam_events_start_time ON rotterdam_events (start_time);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_rotterdam_events_subcat_active ON rotterdam_events (subcategory, is_active);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_rotterdam_events_district_active ON rotterdam_events (district, is_active);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_rotterdam_events_source ON rotterdam_events (source);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_rotterdam_events_venue ON rotterdam_events (venue_name);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_rotterdam_events_title_trgm ON rotterdam_events USING GIN (title gin_trgm_ops);")
+        )
 
     logger.info("Database schema initialized successfully.")
 

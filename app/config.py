@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     OPEN_DATA_SOFT_KEY: str = ""
     OPENOV_API_KEY: str = ""
     ENERGIEONDERBREKINGEN_API_KEY: str = ""
+    TICKETMASTER_CONSUMER_KEY: str = ""
+    TICKETMASTER_CONSUMER_SECRET: str = ""
+    EVENTS_POLL_INTERVAL_SECONDS: int = 1800
 
     # Geospatial Constants
     ROTTERDAM_MIN_LON: float = 4.25

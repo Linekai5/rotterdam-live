@@ -14,8 +14,8 @@ router = APIRouter(prefix="/search", tags=["Global Spatial Search"])
 
 @router.get("", response_model=Dict[str, Any])
 async def global_spatial_search(
-    q: str = Query(..., min_length=2, description="Global search query (e.g. 'Coolsingel 42', 'Albert Heijn', 'Erasmusbrug')"),
-    types: str = Query("address,retail,amenity", description="Comma-separated entity types: 'address', 'retail', 'amenity'"),
+    q: str = Query(..., min_length=2, description="Global search query (e.g. 'Coolsingel 42', 'Albert Heijn', 'Erasmusbrug', 'Ahoy')"),
+    types: str = Query("address,retail,amenity,event", description="Comma-separated entity types: 'address', 'retail', 'amenity', 'event'"),
     limit: int = Query(25, ge=1, le=100, description="Max results to return"),
 ):
     """
@@ -155,6 +155,35 @@ async def global_spatial_search(
                         "subcategory": r.subcategory,
                         "district": r.district,
                         "score": 0.6,
+                    },
+                })
+
+        # 4. Search Events
+        if "event" in selected_types or "events" in selected_types:
+            sql_ev = text("""
+                SELECT 
+                    id, 'event' as entity_type, title, subcategory, venue_name, district,
+                    ST_X(geom) as lon, ST_Y(geom) as lat,
+                    similarity(title, :q) as score
+                FROM rotterdam_events
+                WHERE is_active = true AND (title % :q OR venue_name ILIKE :q_p OR title ILIKE :q_p)
+                ORDER BY score DESC
+                LIMIT :limit;
+            """)
+            ev_rows = (await session.execute(sql_ev, {"q": query_str, "q_p": f"%{query_str}%", "limit": limit})).fetchall()
+            for r in ev_rows:
+                results.append({
+                    "type": "Feature",
+                    "id": r.id,
+                    "geometry": {"type": "Point", "coordinates": [float(r.lon), float(r.lat)]},
+                    "properties": {
+                        "id": r.id,
+                        "entity_type": "event",
+                        "title": r.title,
+                        "subtitle": f"{r.venue_name} • {r.subcategory.capitalize()}",
+                        "subcategory": r.subcategory,
+                        "district": r.district,
+                        "score": float(r.score) if r.score is not None else 0.7,
                     },
                 })
 

@@ -295,3 +295,60 @@ class DistrictHousingMetrics(Base):
     )
 
 
+class RotterdamEvent(Base):
+    """
+    Verified Cultural, Entertainment, Stadium Fixture, and Municipal Festival Event in Rotterdam.
+    Ingested asynchronously from Ticketmaster, Stadium Fixture iCal feeds (De Kuip, Het Kasteel, Woudestein),
+    and Municipal Festival Agendas.
+    """
+    __tablename__ = "rotterdam_events"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
+    category: Mapped[str] = mapped_column(String(64), default="event", index=True, nullable=False)
+    subcategory: Mapped[str] = mapped_column(String(64), index=True, nullable=False)  # concert, stadium_fixture, festival, theatre, comedy, sports, cultural, exhibition
+    source: Mapped[str] = mapped_column(String(64), index=True, nullable=False)  # ticketmaster, stadium_fixtures, municipal_festivals, open_agenda
+    venue_name: Mapped[str] = mapped_column(String(256), index=True, nullable=False)
+    venue_address: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    venue_postal_code: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    end_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    district: Mapped[str] = mapped_column(String(128), index=True, nullable=False)  # Assigned via PostGIS ST_Within
+
+    # PostGIS geometry: exact Point in EPSG:4326
+    geom = mapped_column(
+        Geometry(geometry_type="POINT", srid=4326, spatial_index=True),
+        nullable=False,
+    )
+
+    price_min: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    price_max: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    price_currency: Mapped[Optional[str]] = mapped_column(String(8), default="EUR", nullable=True)
+    ticket_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    image_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    status: Mapped[str] = mapped_column(String(64), default="scheduled", nullable=False)
+    details: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=True, index=True, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index("idx_events_start_time", "start_time"),
+        Index("idx_events_subcat_active", "subcategory", "is_active"),
+        Index("idx_events_district_active", "district", "is_active"),
+        Index("idx_events_source", "source"),
+        Index("idx_events_venue", "venue_name"),
+    )
+
+
