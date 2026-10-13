@@ -55,7 +55,7 @@
   <!-- Centered "rotterdam will be live soon" div (Basic Dark Style) -->
   <div class="center-overlay">
     <div class="message-box">
-      Rotterdam will be live soon
+      Amsterdam will be live soon
     </div>
   </div>
 </div>
