@@ -31,6 +31,7 @@ flowchart TD
         DONKEY_FEED["Donkey Republic GBFS Bike Sharing"]
         OPENOV_FEED["OpenOV GTFS-RT Transit Alerts"]
         NEWS_FEED["Rijnmond RSS & Municipal Press Alerts"]
+        CBS_FEED["CBS StatLine OData v3/v4 (86358NED, 86165NED, 85984NED)"]
     end
 
     subgraph "Ingestion Worker (worker.py / APScheduler)"
@@ -46,24 +47,25 @@ flowchart TD
         P2000_INGEST["P2000Ingestor (Discipline Classification & Geocoding)"]
         NEWS_INGEST["NewsIngestor (Rijnmond & City Press)"]
         SPATIAL_INGEST["SpatialBaselineIngestor (19 CBS District Polygons)"]
+        LIVING_HARV["RotterdamLivingHarvester (Demographics, Housing, Wijkprofiel)"]
     end
 
     subgraph "Database & Cache Layer"
-        PG[("PostgreSQL 16 + PostGIS 3.4\n- rotterdam_addresses: 382,814 rows\n- city_amenities: 10,136 rows\n- rotterdam_retail: 2,950 rows\n- live_events: ~400 real-time rows\n- rotterdam_districts: 19 polygons\n(Spatial GiST & pg_trgm GIN Indexes)")]
-        REDIS[("Redis 7 In-Memory Cache\nTTL: 15s - 7200s\nSub-5ms Cache Responses")]
+        PG[("PostgreSQL 16 + PostGIS 3.4\n- rotterdam_addresses: 382,814 rows\n- city_amenities: 10,136 rows\n- rotterdam_retail: 2,950 rows\n- district_demographics: 19 rows\n- district_housing_metrics: 19 rows\n- live_events: ~400 real-time rows\n- rotterdam_districts: 19 polygons\n(Spatial GiST & pg_trgm GIN Indexes)")]
+        REDIS[("Redis 7 In-Memory Cache\nTTL: 15s - 86400s\nSub-5ms Cache Responses")]
     end
 
     subgraph "API Service (FastAPI / Uvicorn)"
-        API["FastAPI Routing Engine (/api/v1)\nSub-30ms RFC 7946 GeoJSON\nUnified Global Search Engine"]
+        API["FastAPI Routing Engine (/api/v1)\nSub-30ms RFC 7946 GeoJSON\nUnified Global Search Engine\nDistrict Passport Engine"]
     end
 
     subgraph "Frontend Client"
-        WEB["MapLibre GL + Svelte (Rott-live)\nVector Tile Base + Dynamic Layers + Animated Radar"]
+        WEB["MapLibre GL + Svelte (Rott-live)\nVector Tile Base + Dynamic Layers + Animated Radar + District Passports"]
     end
 
-    P2000_FEED & RWS_FEED & MUN_FEED & STEDIN_FEED & BAG_FEED & OSM_FEED & WEATHER_FEED & RADAR_FEED & PDOK_FEED & DCMR_FEED & DONKEY_FEED & OPENOV_FEED & NEWS_FEED --> SCHED
-    SCHED --> BAG_HARV & RETAIL_HARV & WEATHER_HARV & CAM_HARV & AMEN_INGEST & MOB_INGEST & ROAD_INGEST & UTIL_INGEST & P2000_INGEST & NEWS_INGEST & SPATIAL_INGEST
-    BAG_HARV & RETAIL_HARV & WEATHER_HARV & CAM_HARV & AMEN_INGEST & MOB_INGEST & ROAD_INGEST & UTIL_INGEST & P2000_INGEST & NEWS_INGEST & SPATIAL_INGEST --> PG
+    P2000_FEED & RWS_FEED & MUN_FEED & STEDIN_FEED & BAG_FEED & OSM_FEED & WEATHER_FEED & RADAR_FEED & PDOK_FEED & DCMR_FEED & DONKEY_FEED & OPENOV_FEED & NEWS_FEED & CBS_FEED --> SCHED
+    SCHED --> BAG_HARV & RETAIL_HARV & WEATHER_HARV & CAM_HARV & AMEN_INGEST & MOB_INGEST & ROAD_INGEST & UTIL_INGEST & P2000_INGEST & NEWS_INGEST & SPATIAL_INGEST & LIVING_HARV
+    BAG_HARV & RETAIL_HARV & WEATHER_HARV & CAM_HARV & AMEN_INGEST & MOB_INGEST & ROAD_INGEST & UTIL_INGEST & P2000_INGEST & NEWS_INGEST & SPATIAL_INGEST & LIVING_HARV --> PG
     PG --> API
     REDIS <--> API
     API --> WEB
@@ -94,6 +96,8 @@ erDiagram
     rotterdam_districts ||--o{ rotterdam_retail : "contains (ST_Within)"
     rotterdam_districts ||--o{ city_amenities : "contains (ST_Within)"
     rotterdam_districts ||--o{ live_events : "contains (ST_Within)"
+    rotterdam_districts ||--|| district_demographics : "has (district_code)"
+    rotterdam_districts ||--|| district_housing_metrics : "has (district_code)"
     rotterdam_addresses ||--o{ rotterdam_retail : "spatial link (ST_DWithin 50m)"
 
     rotterdam_addresses {
@@ -160,6 +164,50 @@ erDiagram
         jsonb properties
         geometry geom
     }
+
+    district_demographics {
+        varchar id PK
+        varchar district_code FK
+        varchar district_name
+        integer total_population
+        integer population_density_km2
+        integer men
+        integer women
+        integer age_0_14
+        integer age_15_24
+        integer age_25_44
+        integer age_45_64
+        integer age_65_plus
+        integer total_households
+        integer single_person_households
+        float single_person_pct
+        float average_household_size
+        integer average_income_per_inhabitant
+        timestamp updated_at
+    }
+
+    district_housing_metrics {
+        varchar id PK
+        varchar district_code FK
+        varchar district_name
+        integer total_residential_units
+        float avg_surface_area_m2
+        float median_surface_area_m2
+        integer pre_war_count
+        integer post_war_count
+        integer late_20th_count
+        integer modern_count
+        integer average_woz_value
+        float owner_occupied_pct
+        float social_rent_pct
+        float private_rent_pct
+        float livability_index
+        float safety_index
+        float physical_index
+        float social_index
+        jsonb amenity_counts
+        timestamp updated_at
+    }
 ```
 
 ### Table Breakdown & Live Record Inventory
@@ -171,6 +219,8 @@ erDiagram
 | **`rotterdam_retail`** | **2,950** | Verified commercial shops, supermarkets, and retail facilities (97.3% BAG linked). | `idx_retail_geom` (GIST), `idx_retail_name_trgm` (GIN `name gin_trgm_ops`), `idx_retail_shop_district` (`shop_type, district`), `idx_retail_brand`. |
 | **`live_events`** | **~400** | Transient situational events (P2000 dispatches, bridges, parking, outages, weather). Purged every 15m. | `idx_live_events_geom` (GIST), `idx_live_events_category_time` (`category, timestamp`), `idx_live_events_active` (`expires_at, category`). |
 | **`rotterdam_districts`** | **19** | Official CBS/PDOK municipal district MultiPolygon boundaries (Centrum, Delfshaven, etc.). | `idx_rotterdam_districts_geom` (GIST), `idx_rotterdam_districts_code`. |
+| **`district_demographics`** | **19** | Official CBS population, age brackets (0-14 to 65+), density, households, and income per district. | `idx_district_demographics_code`, `idx_district_demographics_name`. |
+| **`district_housing_metrics`** | **19** | Living metrics per district: residential units, avg/median $m^2$, era splits, WOZ values, tenure, livability indices, and amenity access counts. | `idx_district_housing_code`, `idx_district_housing_name`. |
 
 ---
 
@@ -225,6 +275,27 @@ erDiagram
   * Butchers: 55
   * Opticians: 54
   * Furniture: 48
+
+### D. Living & Demographics Subsystem (`district_demographics` & `district_housing_metrics`)
+* **Municipal Population:** **673,804** citizens (CBS 2026) across 19 districts (3,058 pop/km² density).
+* **Total Residential Stock:** **348,883** dwellings (Kadaster BAG `woonfunctie`).
+* **Housing Tenure (Rotterdam Total):** 35% Owner-occupied (`koop`), 43% Social rent (`corporatie`), 22% Private rent.
+* **Top Populated Districts:**
+  * *Prins Alexander:* 97,795 residents, 49,339 dwellings, €360k avg WOZ.
+  * *Feijenoord:* 81,510 residents, 44,880 dwellings, €311k avg WOZ.
+  * *Delfshaven:* 76,590 residents, 37,903 dwellings, €325k avg WOZ.
+  * *Charlois:* 70,935 residents, 35,573 dwellings, €240k avg WOZ.
+  * *IJsselmonde:* 63,470 residents, 30,003 dwellings, €267k avg WOZ.
+  * *Kralingen-Crooswijk:* 54,850 residents, 30,928 dwellings, €395k avg WOZ.
+  * *Noord:* 51,960 residents, 29,648 dwellings, €359k avg WOZ.
+  * *Hillegersberg-Schiebroek:* 44,790 residents, 21,545 dwellings, €496k avg WOZ.
+  * *Rotterdam Centrum:* 42,925 residents, 29,511 dwellings, €424k avg WOZ.
+* **Dwelling Era Distribution (Rotterdam Total):**
+  * *Pre-War (< 1945):* 84,723 dwellings (24.3%)
+  * *Post-War Reconstruction (1945–1969):* 102,408 dwellings (29.4%)
+  * *Late 20th Century (1970–1999):* 98,112 dwellings (28.1%)
+  * *Modern (2000–present):* 63,640 dwellings (18.2%)
+* **Wijkprofiel Livability Calibration:** Baseline index ~100 with official safety, physical, and social cohesion scores per district.
 
 ---
 
@@ -364,6 +435,7 @@ flowchart LR
         AMENITIES["Civic Amenities (24 hrs)"]
         RETAIL["Retail Harvester (24 hrs)"]
         BAG_HARV["Kadaster BAG Addresses (7 days)"]
+        LIVING["Living Domain Harvester (7 days)"]
     end
 ```
 
@@ -429,6 +501,24 @@ async function searchAddresses(query) {
 }
 ```
 
+### D. Consuming Unified District Passports & Demographics in MapLibre GL
+```javascript
+import { fetchDistrictPassport, displayDistrictPassportLayer } from '$lib/livingClient.js';
+
+// 1. Fetch District Passport GeoJSON Feature
+const passport = await fetchDistrictPassport('Centrum');
+
+// 2. Render district MultiPolygon boundary on map
+displayDistrictPassportLayer(map, passport);
+
+// 3. Access demographic, housing, and amenity indicators
+console.log(passport.properties.demographics.total_population); // 42925
+console.log(passport.properties.housing.average_woz_value);     // 424000
+console.log(passport.properties.housing.construction_eras);    // pre_war, post_war, late_20th, modern
+console.log(passport.properties.amenities.supermarkets);        // 26
+console.log(passport.properties.livability.overall_index);      // 104.0
+```
+
 ---
 
 ## 9. Automated Test Suite & Quality Assurance
@@ -451,16 +541,16 @@ tests/test_schemas.py ...                                                [ 78%]
 tests/test_search.py ...                                                 [ 85%]
 tests/test_weather.py .......                                            [100%]
 
-============================== 47 passed in 4.87s ==============================
+============================== 47 passed in 4.52s ==============================
 ```
 
 * **Pass Rate:** **100% (47 passed, 0 failed, 0 warnings)**
-* **Execution Time:** ~4.87 seconds
+* **Execution Time:** ~4.52 seconds
 
 ---
 
 ## 10. Repository & Git Status
 
-* **Backend Repository:** [`github.com/Linekai5/rotterdam-live-api`](https://github.com/Linekai5/rotterdam-live-api) (Private, `main` branch, commit `f91c875`)
-* **Frontend Repository:** [`github.com/Linekai5/Rott-live`](https://github.com/Linekai5/Rott-live) (Private, `main` branch, commit `d87207a`)
+* **Backend Repository:** [`github.com/Linekai5/rotterdam-live-api`](https://github.com/Linekai5/rotterdam-live-api) (Private, `main` branch, commit `fdda50d`)
+* **Frontend Repository:** [`github.com/Linekai5/Rott-live`](https://github.com/Linekai5/Rott-live) (Private, `main` branch, commit `da67530`)
 * **Working Tree:** Both repositories are clean and pushed to `origin main`.
