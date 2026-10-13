@@ -19,6 +19,10 @@ from app.schemas.events import (
     VenueSummary,
     VenueListResponse,
     EventStatsResponse,
+    NextFixtureInfo,
+    StadiumProperties,
+    StadiumFeature,
+    StadiumFeatureCollection,
 )
 from app.services.spatial_service import find_district_for_point
 
@@ -202,6 +206,7 @@ async def query_rotterdam_events(
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
     active_only: bool = True,
+    include_past: bool = False,
     bbox: Optional[Tuple[float, float, float, float]] = None,
     limit: int = 100,
     offset: int = 0,
@@ -215,6 +220,9 @@ async def query_rotterdam_events(
 
     if active_only:
         conditions.append("is_active = true")
+
+    if not include_past:
+        conditions.append("COALESCE(end_time, start_time + INTERVAL '3 hours') >= NOW()")
 
     if subcategory:
         conditions.append("subcategory = :subcategory")
@@ -550,3 +558,116 @@ async def query_event_stats(session: AsyncSession) -> EventStatsResponse:
         top_venues=venues,
         timestamp=datetime.now(timezone.utc),
     )
+
+
+# Canonical Rotterdam Football Stadiums
+ROTTERDAM_STADIUMS = [
+    {
+        "id": "stadium-de-kuip",
+        "name": "Stadion Feijenoord (De Kuip)",
+        "club": "Feyenoord",
+        "capacity": 47500,
+        "address": "Van Zandvlietplein 1",
+        "postal_code": "3077 AA",
+        "district": "Feijenoord",
+        "coordinates": [4.5231, 51.8939],
+        "venue_pattern": "%kuip%",
+        "club_pattern": "%feyenoord%",
+    },
+    {
+        "id": "stadium-het-kasteel",
+        "name": "Sparta-Stadion Het Kasteel",
+        "club": "Sparta Rotterdam",
+        "capacity": 10600,
+        "address": "Spartastraat 7-9",
+        "postal_code": "3027 ER",
+        "district": "Delfshaven",
+        "coordinates": [4.4336, 51.9194],
+        "venue_pattern": "%kasteel%",
+        "club_pattern": "%sparta%",
+    },
+    {
+        "id": "stadium-woudestein",
+        "name": "Van Donge & De Roo Stadion (Woudestein)",
+        "club": "Excelsior Rotterdam",
+        "capacity": 4500,
+        "address": "Honingerdijk 110",
+        "postal_code": "3062 NX",
+        "district": "Kralingen-Crooswijk",
+        "coordinates": [4.5217, 51.9192],
+        "venue_pattern": "%woudestein%",
+        "club_pattern": "%excelsior%",
+    },
+]
+
+
+async def query_stadium_venues(session: AsyncSession) -> StadiumFeatureCollection:
+    """Query the 3 official Rotterdam football stadium venues with upcoming match telemetry."""
+    features: List[StadiumFeature] = []
+    now = datetime.now(timezone.utc)
+
+    for stad in ROTTERDAM_STADIUMS:
+        # 1. Total scheduled fixtures
+        cnt_stmt = text(
+            """
+            SELECT COUNT(*) 
+            FROM rotterdam_events 
+            WHERE (venue_name ILIKE :v_pat OR title ILIKE :c_pat)
+              AND is_active = true;
+            """
+        )
+        cnt_res = await session.execute(
+            cnt_stmt, {"v_pat": stad["venue_pattern"], "c_pat": stad["club_pattern"]}
+        )
+        total_fixtures = cnt_res.scalar() or 0
+
+        # 2. Next upcoming fixture
+        next_stmt = text(
+            """
+            SELECT id, title, start_time, end_time, ticket_url, status
+            FROM rotterdam_events
+            WHERE (venue_name ILIKE :v_pat OR title ILIKE :c_pat)
+              AND is_active = true
+              AND COALESCE(end_time, start_time + INTERVAL '3 hours') >= NOW()
+            ORDER BY start_time ASC
+            LIMIT 1;
+            """
+        )
+        next_res = await session.execute(
+            next_stmt, {"v_pat": stad["venue_pattern"], "c_pat": stad["club_pattern"]}
+        )
+        next_row = next_res.fetchone()
+
+        next_fix = None
+        if next_row:
+            next_fix = NextFixtureInfo(
+                id=next_row[0],
+                title=next_row[1],
+                start_time=next_row[2],
+                end_time=next_row[3],
+                ticket_url=next_row[4],
+                status=next_row[5] or "scheduled",
+            )
+
+        props = StadiumProperties(
+            id=stad["id"],
+            name=stad["name"],
+            club=stad["club"],
+            capacity=stad["capacity"],
+            address=stad["address"],
+            postal_code=stad["postal_code"],
+            district=stad["district"],
+            coordinates=stad["coordinates"],
+            total_fixtures=total_fixtures,
+            next_fixture=next_fix,
+        )
+        geom = PointGeometry(type="Point", coordinates=stad["coordinates"])
+        features.append(StadiumFeature(type="Feature", geometry=geom, properties=props))
+
+    return StadiumFeatureCollection(
+        type="FeatureCollection",
+        features=features,
+        total_stadiums=len(features),
+        timestamp=now,
+    )
+

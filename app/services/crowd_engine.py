@@ -814,16 +814,16 @@ async def execute_crowdness_cycle(session: AsyncSession) -> Dict[str, Any]:
         "busiest_district": busiest_d,
         "quietest_district": quietest_d,
     }
-    await set_cached_json("crowd:live:rotterdam", master_feature_collection, ttl_seconds=900)
+    await set_cached_json("crowd:live:rotterdam", master_feature_collection, ttl_seconds=180)
 
     # Individual district snapshots
     for d_name, d_data in district_details_dict.items():
         cache_key = f"crowd:district:{d_name.lower()}"
-        await set_cached_json(cache_key, d_data, ttl_seconds=900)
+        await set_cached_json(cache_key, d_data, ttl_seconds=180)
         # Also cache under alias without 'rotterdam '
         if d_name.lower().startswith("rotterdam "):
             alias = d_name.lower().replace("rotterdam ", "")
-            await set_cached_json(f"crowd:district:{alias}", d_data, ttl_seconds=900)
+            await set_cached_json(f"crowd:district:{alias}", d_data, ttl_seconds=180)
 
     # Forecast Matrix
     forecast_matrix = {
@@ -831,7 +831,7 @@ async def execute_crowdness_cycle(session: AsyncSession) -> Dict[str, Any]:
         "horizons_evaluated_hours": horizons_hours,
         "districts": matrix_items,
     }
-    await set_cached_json("crowd:forecast:all", forecast_matrix, ttl_seconds=900)
+    await set_cached_json("crowd:forecast:all", forecast_matrix, ttl_seconds=180)
 
     # Overview Stats
     quiet_cnt = sum(1 for f in evaluated_features if f["properties"]["crowd_index"] <= 25.0)
@@ -859,7 +859,7 @@ async def execute_crowdness_cycle(session: AsyncSession) -> Dict[str, Any]:
         "citywide_parking_occupancy_pct": citywide_parking_occ,
         "active_events_total": len(events_res),
     }
-    await set_cached_json("crowd:overview", overview_stats, ttl_seconds=900)
+    await set_cached_json("crowd:overview", overview_stats, ttl_seconds=180)
 
     logger.info(
         "Crowdness engine cycle finished: city avg index={}, busiest='{}' ({}), quietest='{}' ({})",

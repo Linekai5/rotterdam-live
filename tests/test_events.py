@@ -126,12 +126,12 @@ async def test_events_festivals_endpoint():
 
 
 @pytest.mark.asyncio
-async def test_events_stadiums_endpoint():
-    """Verify GET /api/v1/events/stadiums returns stadium fixtures."""
+async def test_events_fixtures_endpoint():
+    """Verify GET /api/v1/events/fixtures returns upcoming stadium fixtures."""
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.get("/api/v1/events/stadiums")
+        resp = await client.get("/api/v1/events/fixtures")
         assert resp.status_code == 200
         data = resp.json()
         assert data["type"] == "FeatureCollection"
@@ -143,6 +143,78 @@ async def test_events_stadiums_endpoint():
                 "Sparta-Stadion Het Kasteel",
                 "Van Donge & De Roo Stadion (Woudestein)",
             ]
+
+
+@pytest.mark.asyncio
+async def test_events_stadiums_endpoint():
+    """Verify GET /api/v1/events/stadiums returns exactly 3 stadium venue points with next_fixture telemetry."""
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/v1/events/stadiums")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["type"] == "FeatureCollection"
+        assert data["total_stadiums"] == 3
+        assert len(data["features"]) == 3
+        stadium_names = [f["properties"]["name"] for f in data["features"]]
+        assert "Stadion Feijenoord (De Kuip)" in stadium_names
+        assert "Sparta-Stadion Het Kasteel" in stadium_names
+        assert "Van Donge & De Roo Stadion (Woudestein)" in stadium_names
+        for f in data["features"]:
+            assert "capacity" in f["properties"]
+            assert "club" in f["properties"]
+            assert "next_fixture" in f["properties"]
+            if f["properties"]["next_fixture"]:
+                assert "title" in f["properties"]["next_fixture"]
+                assert "start_time" in f["properties"]["next_fixture"]
+
+
+@pytest.mark.asyncio
+async def test_events_today_endpoint():
+    """Verify GET /api/v1/events/today returns events scheduled for today."""
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/v1/events/today")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["type"] == "FeatureCollection"
+        assert "features" in data
+
+
+@pytest.mark.asyncio
+async def test_events_temporal_filter():
+    """Verify include_past filter excludes past events by default and includes when true."""
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp_future = await client.get("/api/v1/events?limit=500&include_past=false")
+        assert resp_future.status_code == 200
+        data_future = resp_future.json()
+
+        resp_all = await client.get("/api/v1/events?limit=500&include_past=true")
+        assert resp_all.status_code == 200
+        data_all = resp_all.json()
+
+        assert len(data_all["features"]) >= len(data_future["features"])
+
+
+@pytest.mark.asyncio
+async def test_live_feed_excludes_unstarted_future_events():
+    """Verify GET /api/v1/live?category=event does not leak future unstarted events."""
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/v1/live?category=event")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["type"] == "FeatureCollection"
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        for f in data["features"]:
+            start = datetime.fromisoformat(f["properties"]["timestamp"].replace("Z", "+00:00"))
+            assert start <= now
 
 
 @pytest.mark.asyncio

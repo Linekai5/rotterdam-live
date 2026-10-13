@@ -134,7 +134,17 @@ async def query_live_events(
         params["min_severity"] = min_severity
 
     if active_only:
-        conditions.append("(expires_at IS NULL OR expires_at > NOW())")
+        if category == "event":
+            conditions.append(
+                "timestamp <= NOW() AND COALESCE(expires_at, timestamp + INTERVAL '3 hours') >= NOW()"
+            )
+        elif category:
+            conditions.append("(expires_at IS NULL OR expires_at > NOW())")
+        else:
+            conditions.append(
+                "((category != 'event' AND (expires_at IS NULL OR expires_at > NOW())) OR "
+                "(category = 'event' AND timestamp <= NOW() AND COALESCE(expires_at, timestamp + INTERVAL '3 hours') >= NOW()))"
+            )
 
     if bbox:
         min_lon, min_lat, max_lon, max_lat = bbox

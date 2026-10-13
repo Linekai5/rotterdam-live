@@ -108,3 +108,43 @@ class EventStatsResponse(BaseModel):
     districts: Dict[str, int]
     top_venues: Dict[str, int]
     timestamp: datetime
+
+
+class NextFixtureInfo(BaseModel):
+    """Details of the upcoming match at a stadium."""
+    id: str = Field(..., description="Unique fixture identifier")
+    title: str = Field(..., description="Match headline, e.g. 'Feyenoord - Ajax'")
+    start_time: datetime = Field(..., description="Match kickoff timestamp")
+    end_time: Optional[datetime] = Field(None, description="Match conclusion timestamp")
+    ticket_url: Optional[str] = Field(None, description="Ticket sales URL")
+    status: str = Field("scheduled", description="Fixture status")
+
+
+class StadiumProperties(BaseModel):
+    """Metadata and status for physical football stadium venue."""
+    id: str = Field(..., description="Unique stadium venue identifier")
+    name: str = Field(..., description="Official stadium name")
+    club: str = Field(..., description="Resident football club")
+    capacity: int = Field(..., description="Total spectator capacity")
+    address: str = Field(..., description="Street address")
+    postal_code: str = Field(..., description="Dutch postal code")
+    district: str = Field(..., description="Rotterdam municipal district")
+    coordinates: List[float] = Field(..., description="[longitude, latitude]")
+    total_fixtures: int = Field(0, description="Total upcoming and scheduled fixtures")
+    next_fixture: Optional[NextFixtureInfo] = Field(None, description="Next upcoming fixture at this stadium")
+
+
+class StadiumFeature(BaseModel):
+    """RFC 7946 GeoJSON Feature representing a physical stadium venue."""
+    type: Literal["Feature"] = "Feature"
+    geometry: PointGeometry
+    properties: StadiumProperties
+
+
+class StadiumFeatureCollection(BaseModel):
+    """RFC 7946 GeoJSON FeatureCollection of Rotterdam football stadiums."""
+    type: Literal["FeatureCollection"] = "FeatureCollection"
+    features: List[StadiumFeature] = Field(default_factory=list)
+    total_stadiums: int = Field(3, description="Total monitored football stadiums in Rotterdam")
+    timestamp: datetime = Field(..., description="Snapshot evaluation timestamp")
+

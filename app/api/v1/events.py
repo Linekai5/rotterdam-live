@@ -10,7 +10,7 @@ Guarantees sub-30ms API responses (sub-5ms cached in Redis) with ETag polling su
 """
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,12 +22,14 @@ from app.schemas.events import (
     RotterdamEventFeatureCollection,
     VenueListResponse,
     EventStatsResponse,
+    StadiumFeatureCollection,
 )
 from app.services.events_service import (
     query_rotterdam_events,
     query_event_by_id,
     query_event_venues,
     query_event_stats,
+    query_stadium_venues,
 )
 from app.cache.redis_client import get_cached_json, set_cached_json, quantize_bbox
 
@@ -52,6 +54,7 @@ async def get_events(
     date_from: Optional[datetime] = Query(None, description="Filter events starting on or after ISO 8601 UTC"),
     date_to: Optional[datetime] = Query(None, description="Filter events starting on or before ISO 8601 UTC"),
     active_only: bool = Query(True, description="Only return active unexpired events"),
+    include_past: bool = Query(False, description="Include past events (default excludes past events)"),
     bbox: Optional[Tuple[float, float, float, float]] = Depends(parse_bbox_param),
     limit: int = Query(100, ge=1, le=500, description="Max items to return"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
@@ -67,7 +70,7 @@ async def get_events(
 
     cache_key = (
         f"events:list:{bbox_str}:{subcategory}:{source}:{district}:{venue}:{q}:"
-        f"{d_from_str}:{d_to_str}:{active_only}:{limit}:{offset}"
+        f"{d_from_str}:{d_to_str}:{active_only}:{include_past}:{limit}:{offset}"
     )
 
     cached = await get_cached_json(cache_key)
@@ -84,6 +87,7 @@ async def get_events(
             date_from=date_from,
             date_to=date_to,
             active_only=active_only,
+            include_past=include_past,
             bbox=bbox,
             limit=limit,
             offset=offset,
@@ -100,6 +104,37 @@ async def get_events(
         response.status_code = status.HTTP_304_NOT_MODIFIED
         return RotterdamEventFeatureCollection(type="FeatureCollection", features=[])
 
+    return result
+
+
+@router.get("/today", response_model=RotterdamEventFeatureCollection)
+async def get_events_today(
+    district: Optional[str] = Query(None, description="Filter by district"),
+    include_past: bool = Query(False, description="Include past events that occurred earlier today"),
+    session: AsyncSession = Depends(get_db),
+) -> RotterdamEventFeatureCollection:
+    """
+    Events scheduled for today in Rotterdam.
+    Filtered by default to active/upcoming events today.
+    """
+    now = datetime.now(timezone.utc)
+    start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_of_today = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    cache_key = f"events:today:{district or 'all'}:{include_past}:{start_of_today.date().isoformat()}"
+    cached = await get_cached_json(cache_key)
+    if cached:
+        return RotterdamEventFeatureCollection.model_validate(cached)
+
+    result = await query_rotterdam_events(
+        session=session,
+        district=district,
+        date_from=start_of_today,
+        date_to=end_of_today,
+        include_past=include_past,
+        limit=100,
+    )
+    await set_cached_json(cache_key, result.model_dump(mode="json"), ttl_seconds=120)
     return result
 
 
@@ -125,13 +160,14 @@ async def get_venues(
 @router.get("/festivals", response_model=RotterdamEventFeatureCollection)
 async def get_festivals(
     district: Optional[str] = Query(None, description="Filter by district"),
+    include_past: bool = Query(False, description="Include past festivals"),
     session: AsyncSession = Depends(get_db),
 ) -> RotterdamEventFeatureCollection:
     """
     Dedicated endpoint for Rotterdam municipal festivals and open cultural agendas
     (IFFR, Marathon, North Sea Jazz, Zomercarnaval, Wereldhavendagen, etc.).
     """
-    cache_key = f"events:festivals:{district or 'all'}"
+    cache_key = f"events:festivals:{district or 'all'}:{include_past}"
     cached = await get_cached_json(cache_key)
     if cached:
         return RotterdamEventFeatureCollection.model_validate(cached)
@@ -140,23 +176,24 @@ async def get_festivals(
         session=session,
         source="municipal_festivals",
         district=district,
+        include_past=include_past,
         limit=50,
     )
     await set_cached_json(cache_key, result.model_dump(mode="json"), ttl_seconds=600)
     return result
 
 
-@router.get("/stadiums", response_model=RotterdamEventFeatureCollection)
 @router.get("/fixtures", response_model=RotterdamEventFeatureCollection)
 async def get_stadium_fixtures(
     club: Optional[str] = Query(None, description="Filter by club or stadium (Feyenoord, Sparta, Excelsior)"),
+    include_past: bool = Query(False, description="Include past matches"),
     session: AsyncSession = Depends(get_db),
 ) -> RotterdamEventFeatureCollection:
     """
     Dedicated endpoint for Rotterdam football stadium fixtures
     (Stadion Feijenoord / De Kuip, Sparta-Stadion Het Kasteel, Van Donge & De Roo Stadion).
     """
-    cache_key = f"events:fixtures:{club or 'all'}"
+    cache_key = f"events:fixtures:{club or 'all'}:{include_past}"
     cached = await get_cached_json(cache_key)
     if cached:
         return RotterdamEventFeatureCollection.model_validate(cached)
@@ -165,8 +202,30 @@ async def get_stadium_fixtures(
         session=session,
         source="stadium_fixtures",
         venue=club,
+        include_past=include_past,
         limit=100,
     )
+    await set_cached_json(cache_key, result.model_dump(mode="json"), ttl_seconds=600)
+    return result
+
+
+@router.get("/stadiums", response_model=StadiumFeatureCollection)
+async def get_stadiums(
+    session: AsyncSession = Depends(get_db),
+) -> StadiumFeatureCollection:
+    """
+    Dedicated endpoint for Rotterdam's 3 football stadiums (physical venue points):
+    - De Kuip (Stadion Feijenoord)
+    - Sparta-Stadion Het Kasteel
+    - Van Donge & De Roo Stadion (Woudestein)
+    Includes venue metadata and next scheduled fixture.
+    """
+    cache_key = "events:stadiums:venues"
+    cached = await get_cached_json(cache_key)
+    if cached:
+        return StadiumFeatureCollection.model_validate(cached)
+
+    result = await query_stadium_venues(session)
     await set_cached_json(cache_key, result.model_dump(mode="json"), ttl_seconds=600)
     return result
 

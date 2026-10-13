@@ -52,7 +52,7 @@ async def get_live_crowdness(
         # Cache-miss fallback: Read latest indexed snapshots from PostgreSQL (< 30ms)
         cached = await _reconstruct_live_from_db(session)
         if cached:
-            await set_cached_json(cache_key, cached, ttl_seconds=900)
+            await set_cached_json(cache_key, cached, ttl_seconds=120)
         else:
             # Cold-start fallback: Run initial background derivation cycle
             await execute_crowdness_cycle(session)
