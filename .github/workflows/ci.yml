@@ -103,6 +103,8 @@ jobs:
         run: |
           python scripts/init_db.py
           if [ -f tests/fixtures/ci_seed.sql.gz ]; then
+            echo "Clearing placeholder baseline rows before loading high-fidelity seed dataset..."
+            PGPASSWORD=${POSTGRES_PASSWORD} psql -h 127.0.0.1 -U postgres -d rotterdamlive -c "TRUNCATE TABLE district_demographics, district_housing_metrics, rotterdam_districts CASCADE;"
             echo "Loading CI test seed dataset..."
             gunzip -c tests/fixtures/ci_seed.sql.gz | PGPASSWORD=${POSTGRES_PASSWORD} psql -h 127.0.0.1 -U postgres -d rotterdamlive
           fi
