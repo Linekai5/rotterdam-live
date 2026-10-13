@@ -86,6 +86,9 @@ async def init_database():
         await conn.execute(
             text("CREATE INDEX IF NOT EXISTS idx_rotterdam_events_title_trgm ON rotterdam_events USING GIN (title gin_trgm_ops);")
         )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_crowd_hist_district_time ON crowd_telemetry_history (district, timestamp DESC);")
+        )
 
     logger.info("Database schema initialized successfully.")
 

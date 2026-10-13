@@ -10,7 +10,7 @@ from app.ingestion.scheduler import scheduler
 async def main():
     setup_logging()
     logger.info("Starting Rotterdam Live Ingestion Worker Daemon...")
-    logger.info("Ingestion targets: P2000, Garages, Bridges, GBFS, RET Transit, News, Open-Meteo, DCMR Air Quality")
+    logger.info("Ingestion targets: P2000, Garages, Bridges, GBFS, RET Transit, News, Open-Meteo, DCMR Air Quality, Living, Events, Crowdness Engine")
 
     # Handle graceful termination signals
     loop = asyncio.get_running_loop()

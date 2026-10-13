@@ -14,6 +14,7 @@ from app.api.v1.search import router as search_router
 from app.api.v1.weather import router as weather_router
 from app.api.v1.living import router as living_router
 from app.api.v1.events import router as events_router
+from app.api.v1.crowd import router as crowd_router
 
 api_v1_router = APIRouter(prefix="/api/v1")
 
@@ -31,3 +32,5 @@ api_v1_router.include_router(search_router)
 api_v1_router.include_router(weather_router)
 api_v1_router.include_router(living_router)
 api_v1_router.include_router(events_router)
+api_v1_router.include_router(crowd_router)
+

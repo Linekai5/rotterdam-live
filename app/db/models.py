@@ -2,11 +2,13 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from sqlalchemy import (
+    BigInteger,
     DateTime,
     Float,
     Integer,
     String,
     Index,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -350,5 +352,36 @@ class RotterdamEvent(Base):
         Index("idx_events_source", "source"),
         Index("idx_events_venue", "venue_name"),
     )
+
+
+class CrowdTelemetryHistory(Base):
+    """
+    Historical crowdness telemetry snapshots and residual projections per Rotterdam district.
+    Truncated to 15-minute intervals. Zero in-request computation invariant.
+    """
+    __tablename__ = "crowd_telemetry_history"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    district: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    crowd_index: Mapped[float] = mapped_column(Float, nullable=False)
+    crowd_status: Mapped[str] = mapped_column(String(64), nullable=False)
+    parking_occupancy_avg_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    active_events_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    precipitation_mm_h: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    temperature_c: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    details: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("district", "timestamp", name="uq_crowd_hist_district_time"),
+        Index("idx_crowd_hist_district_time", "district", text("timestamp DESC")),
+    )
+
 
 

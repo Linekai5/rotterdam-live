@@ -115,5 +115,9 @@ async def root():
             "live_unified": "/api/v1/live",
             "amenities": "/api/v1/amenities",
             "utilities": "/api/v1/utilities/power-outages",
+            "living": "/api/v1/living/demographics",
+            "events": "/api/v1/events",
+            "crowd": "/api/v1/crowd/live",
+            "crowd_forecast": "/api/v1/crowd/forecast",
         },
     }
