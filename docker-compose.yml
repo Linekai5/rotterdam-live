@@ -1,0 +1,129 @@
+# =============================================================================
+# Rotterdam Live — Local MacBook Development Stack
+# Optimized for macOS (Apple Silicon / Intel) local workflows
+# =============================================================================
+
+services:
+  db:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.db
+    image: rotterdam_live_postgis:16
+    container_name: rotterdam_dev_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}}
+      POSTGRES_DB: ${POSTGRES_DB:-rotterdamlive}
+    volumes:
+      - dev_pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-rotterdamlive}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - rotterdam_dev_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: rotterdam_dev_redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - dev_redisdata:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rotterdam_dev_net
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    image: rotterdam_live_api:dev
+    container_name: rotterdam_dev_api
+    restart: unless-stopped
+    env_file:
+      - ./api/.env
+    environment:
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: "1"
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}}@db:5432/${POSTGRES_DB:-rotterdamlive}
+      DATABASE_URL_SYNC: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}}@db:5432/${POSTGRES_DB:-rotterdamlive}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./api:/app
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "python scripts/init_db.py &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --proxy-headers"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - rotterdam_dev_net
+
+  ingestion_worker:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    image: rotterdam_live_api:dev
+    container_name: rotterdam_dev_worker
+    restart: unless-stopped
+    env_file:
+      - ./api/.env
+    environment:
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: "1"
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}}@db:5432/${POSTGRES_DB:-rotterdamlive}
+      DATABASE_URL_SYNC: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}}@db:5432/${POSTGRES_DB:-rotterdamlive}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./api:/app
+    command: python worker.py
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - rotterdam_dev_net
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: rotterdam_live_web:dev
+    container_name: rotterdam_dev_web
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - rotterdam_dev_net
+
+volumes:
+  dev_pgdata:
+  dev_redisdata:
+
+networks:
+  rotterdam_dev_net:
+    driver: bridge
