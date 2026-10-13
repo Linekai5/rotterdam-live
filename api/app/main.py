@@ -92,6 +92,10 @@ app.include_router(api_v1_router)
 
 
 @app.get("/", tags=["Root"])
+@app.get("/api", tags=["Root"])
+@app.get("/api/", tags=["Root"])
+@app.get("/api/v1", tags=["Root"])
+@app.get("/api/v1/", tags=["Root"])
 async def root():
     """Root info endpoint."""
     return {
