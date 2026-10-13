@@ -5,8 +5,9 @@ import styleSatellite from './style_satellite.json';
 import styleDark from './style_dark.json';
 import { installCoastalOcean, removeCoastalOcean, OCEAN_LAYER } from './coastalOcean.js';
 import { installLiveEvents, filterLiveEvents } from './liveLayers.js';
+import { installTrafficMapLayer, setTrafficVisibility } from './trafficClient.js';
 
-export { installLiveEvents, filterLiveEvents };
+export { installLiveEvents, filterLiveEvents, installTrafficMapLayer, setTrafficVisibility };
 
 /**
  * Rotterdam coordinate bounding box [SW, NE]
@@ -135,6 +136,7 @@ export async function initMap(mapElement, onReady) {
       }
     }
     installLiveEvents(map);
+    installTrafficMapLayer(map);
     if (onReady) onReady(map);
   });
 
@@ -169,6 +171,7 @@ export function switchStyle(map, mode, state = {}) {
       toggle3DBuildings(map, true);
     }
     installLiveEvents(map);
+    installTrafficMapLayer(map);
   });
 }
 
