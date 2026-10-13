@@ -398,11 +398,11 @@ Automated GitHub Actions workflow triggered on pull requests and pushes to `main
 4. **Nginx Validation:** Executes syntax and schema validation (`nginx -t`).
 
 ### Continuous Deployment (`.github/workflows/deploy.yml`)
-Automated zero-downtime rolling deployment to Hetzner VPS:
-* Connects via dedicated deploy key over custom SSH port `2299`.
-* Pulls latest `main` branch into `/home/homeaccount/rotterdam-live`.
-* Rebuilds modified Docker images and triggers zero-downtime container rolling restarts.
-* Executes post-deployment health checks against `https://rotterdamlive.nl` and `http://100.70.237.40`.
+Automated zero-downtime rolling deployment running via self-hosted GitHub Actions runner:
+* **Runner Architecture:** Native ARM64 self-hosted runner (`hetzner-vps`) running under PM2 supervisor (`id: 0`, online, auto-restarting).
+* **Security Model:** Zero open inbound SSH ports on public internet; connects outbound to GitHub Actions over HTTPS.
+* **Rolling Execution:** Triggered automatically on every merge to `main`. Pulls latest code, builds only modified containers with local Docker caches, executes rolling restart, gracefully reloads Nginx (`nginx -s reload`), and validates `/health/live`.
+* **Execution Duration:** Completed in ~45 seconds from PR merge to live production.
 
 ---
 
