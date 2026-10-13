@@ -17,6 +17,7 @@ export const CATEGORY_COLORS = {
   mobility: '#3b82f6',     // Bright Blue (garages, bridges, transit)
   environment: '#10b981',  // Emerald Green (air quality, weather)
   news: '#f59e0b',         // Warm Amber (civic alerts, news)
+  event: '#ec4899',        // Vibrant Pink (Ticketmaster, festivals, stadium fixtures)
   default: '#8b5cf6'       // Purple fallback
 };
 
@@ -89,6 +90,7 @@ export async function installLiveEvents(map, options = {}) {
         'mobility', CATEGORY_COLORS.mobility,
         'environment', CATEGORY_COLORS.environment,
         'news', CATEGORY_COLORS.news,
+        'event', CATEGORY_COLORS.event,
         CATEGORY_COLORS.default
       ],
       'circle-opacity': 0.28,
@@ -116,6 +118,7 @@ export async function installLiveEvents(map, options = {}) {
         'mobility', CATEGORY_COLORS.mobility,
         'environment', CATEGORY_COLORS.environment,
         'news', CATEGORY_COLORS.news,
+        'event', CATEGORY_COLORS.event,
         CATEGORY_COLORS.default
       ],
       'circle-stroke-width': 1.5,
@@ -190,6 +193,21 @@ export async function installLiveEvents(map, options = {}) {
         <div style="margin-top: 6px; font-size: 11px; color: #4b5563;">
           <div><strong>Prioriteit:</strong> Prio ${details.prio || 1}</div>
           <div><strong>Dienst:</strong> ${subcategory.toUpperCase()}</div>
+        </div>
+      `;
+    }
+    // Event details
+    else if (category === 'event') {
+      const venue = details.venue_name || '';
+      const src = details.source || '';
+      const price = details.price_min ? `€${details.price_min}${details.price_max ? ' - €' + details.price_max : ''}` : '';
+      const ticketUrl = details.ticket_url || '';
+      extraHtml = `
+        <div style="margin-top: 6px; font-size: 11px; line-height: 1.4;">
+          ${venue ? `<div><strong>Locatie:</strong> ${venue}</div>` : ''}
+          ${price ? `<div><strong>Prijs:</strong> ${price}</div>` : ''}
+          ${src ? `<div><strong>Bron:</strong> <span style="text-transform: capitalize;">${src.replace('_', ' ')}</span></div>` : ''}
+          ${ticketUrl ? `<div style="margin-top: 5px;"><a href="${ticketUrl}" target="_blank" rel="noopener noreferrer" style="display: inline-block; background: #ec4899; color: #fff; padding: 2px 8px; border-radius: 4px; font-weight: 600; text-decoration: none; font-size: 10px;">Tickets & Info →</a></div>` : ''}
         </div>
       `;
     }
