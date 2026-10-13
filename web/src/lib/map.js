@@ -86,18 +86,20 @@ export async function initMap(mapElement, onReady) {
     zoom: initialZoom || 12,
     minZoom: 8,
     maxZoom: 20,
-    interactive: true,
-    dragPan: true,
-    scrollZoom: true,
-    doubleClickZoom: true,
-    touchZoomRotate: true,
-    dragRotate: true,
-    touchPitch: true,
-    pitchWithRotate: true,
+    interactive: false,
+    dragPan: false,
+    scrollZoom: false,
+    boxZoom: false,
+    dragRotate: false,
+    keyboard: false,
+    doubleClickZoom: false,
+    touchZoomRotate: false,
+    touchPitch: false,
+    pitchWithRotate: false,
     maxPitch: 65,
     antialias: true,
     renderWorldCopies: false,
-    attributionControl: true,
+    attributionControl: false,
     maxTileCacheSize: 500,
     fadeDuration: 0,
     transformRequest: (url, resourceType) => {
@@ -135,8 +137,9 @@ export async function initMap(mapElement, onReady) {
         map.fitBounds(ROTTERDAM_BOUNDS, { padding: 40, animate: false });
       }
     }
-    installLiveEvents(map);
-    installTrafficMapLayer(map);
+    // Keep API connection active in frontend, but do not render live clutter on the map
+    // installLiveEvents(map);
+    // installTrafficMapLayer(map);
     if (onReady) onReady(map);
   });
 
@@ -170,8 +173,8 @@ export function switchStyle(map, mode, state = {}) {
     if (state.buildings3d) {
       toggle3DBuildings(map, true);
     }
-    installLiveEvents(map);
-    installTrafficMapLayer(map);
+    // installLiveEvents(map);
+    // installTrafficMapLayer(map);
   });
 }
 
