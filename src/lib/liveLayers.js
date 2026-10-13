@@ -18,6 +18,7 @@ export const CATEGORY_COLORS = {
   environment: '#10b981',  // Emerald Green (air quality, weather)
   news: '#f59e0b',         // Warm Amber (civic alerts, news)
   event: '#ec4899',        // Vibrant Pink (Ticketmaster, festivals, stadium fixtures)
+  crowd: '#f97316',        // Vibrant Orange (Crowdness Engine)
   default: '#8b5cf6'       // Purple fallback
 };
 
