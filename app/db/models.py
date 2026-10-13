@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from sqlalchemy import (
     DateTime,
+    Float,
     Integer,
     String,
     Index,
@@ -213,4 +214,84 @@ class RotterdamRetail(Base):
         Index("idx_retail_shop_district", "shop_type", "district"),
         Index("idx_retail_brand", "brand"),
     )
+
+
+class DistrictDemographics(Base):
+    """Official CBS Demographics & Household Structure per Rotterdam District."""
+    __tablename__ = "district_demographics"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # e.g. "cbs_WK059901"
+    district_code: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    district_name: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    total_population: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    population_density_km2: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    men: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    women: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    age_0_14: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    age_15_24: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    age_25_44: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    age_45_64: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    age_65_plus: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    total_households: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    single_person_households: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    single_person_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    average_household_size: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    average_income_per_inhabitant: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    source: Mapped[str] = mapped_column(String(64), default="CBS", nullable=False)
+    data_year: Mapped[int] = mapped_column(Integer, default=2026, nullable=False)
+    details: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index("idx_district_demographics_code", "district_code"),
+        Index("idx_district_demographics_name", "district_name"),
+    )
+
+
+class DistrictHousingMetrics(Base):
+    """Housing Volume, Dwelling Sizes, Construction Eras & Livability per District."""
+    __tablename__ = "district_housing_metrics"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # e.g. "housing_WK059901"
+    district_code: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    district_name: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    total_residential_units: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    avg_surface_area_m2: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    median_surface_area_m2: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    min_surface_area_m2: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_surface_area_m2: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    pre_war_count: Mapped[Optional[int]] = mapped_column(Integer, default=0, nullable=True)
+    pre_war_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    post_war_count: Mapped[Optional[int]] = mapped_column(Integer, default=0, nullable=True)
+    post_war_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    late_20th_count: Mapped[Optional[int]] = mapped_column(Integer, default=0, nullable=True)
+    late_20th_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    modern_count: Mapped[Optional[int]] = mapped_column(Integer, default=0, nullable=True)
+    modern_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    average_woz_value: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    owner_occupied_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    social_rent_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    private_rent_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    livability_index: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    safety_index: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    physical_index: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    social_index: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    amenity_counts: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index("idx_district_housing_code", "district_code"),
+        Index("idx_district_housing_name", "district_name"),
+    )
+
 

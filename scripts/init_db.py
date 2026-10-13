@@ -53,6 +53,18 @@ async def init_database():
         await conn.execute(
             text("CREATE INDEX IF NOT EXISTS idx_retail_name_trgm ON rotterdam_retail USING GIN (name gin_trgm_ops);")
         )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_district_demographics_code ON district_demographics (district_code);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_district_demographics_name ON district_demographics (district_name);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_district_housing_code ON district_housing_metrics (district_code);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_district_housing_name ON district_housing_metrics (district_name);")
+        )
 
     logger.info("Database schema initialized successfully.")
 
@@ -64,6 +76,16 @@ async def init_database():
         logger.info("Spatial baseline seed complete: {}", res)
     finally:
         await ingestor.close()
+
+    # 5. Seed living domain demographics & housing metrics
+    from app.ingestion.living_harvester import RotterdamLivingHarvester
+    logger.info("Seeding /living domain demographics and housing metrics...")
+    living_harvester = RotterdamLivingHarvester()
+    try:
+        living_res = await living_harvester.ingest()
+        logger.info("Living domain seed complete: {}", living_res)
+    finally:
+        await living_harvester.close()
 
 
 if __name__ == "__main__":

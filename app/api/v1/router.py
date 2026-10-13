@@ -12,6 +12,7 @@ from app.api.v1.addresses import router as addresses_router
 from app.api.v1.retail import router as retail_router
 from app.api.v1.search import router as search_router
 from app.api.v1.weather import router as weather_router
+from app.api.v1.living import router as living_router
 
 api_v1_router = APIRouter(prefix="/api/v1")
 
@@ -27,3 +28,4 @@ api_v1_router.include_router(addresses_router)
 api_v1_router.include_router(retail_router)
 api_v1_router.include_router(search_router)
 api_v1_router.include_router(weather_router)
+api_v1_router.include_router(living_router)
