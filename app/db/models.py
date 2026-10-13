@@ -384,4 +384,40 @@ class CrowdTelemetryHistory(Base):
     )
 
 
+class CityTrafficSegment(Base):
+    """
+    Monitored motorway and urban arterial traffic corridor in Rotterdam.
+    Stores real-time speed, travel times, delays, and congestion tiers with LineString geometry.
+    """
+    __tablename__ = "city_traffic_segments"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    road_type: Mapped[str] = mapped_column(String(32), index=True, nullable=False)  # motorway, urban_arterial
+    free_flow_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    current_travel_time_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    delay_seconds: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    speed_kmh: Mapped[float] = mapped_column(Float, nullable=False)
+    congestion_level: Mapped[str] = mapped_column(String(32), index=True, nullable=False)  # free_flow, moderate, heavy, standstill
+    district: Mapped[Optional[str]] = mapped_column(String(128), index=True, nullable=True)
+
+    geom = mapped_column(
+        Geometry(geometry_type="LINESTRING", srid=4326, spatial_index=True),
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index("idx_traffic_segments_congestion", "congestion_level"),
+        Index("idx_traffic_segments_road_type", "road_type"),
+    )
+
+
+
 

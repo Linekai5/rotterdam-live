@@ -10,6 +10,7 @@ from app.db.models import (
     DistrictHousingMetrics,
     RotterdamEvent,
     CrowdTelemetryHistory,
+    CityTrafficSegment,
 )
 
 __all__ = [
@@ -23,4 +24,6 @@ __all__ = [
     "DistrictHousingMetrics",
     "RotterdamEvent",
     "CrowdTelemetryHistory",
+    "CityTrafficSegment",
 ]
+

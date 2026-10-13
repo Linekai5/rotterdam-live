@@ -23,6 +23,15 @@ class PolygonGeometry(BaseModel):
     )
 
 
+class LineStringGeometry(BaseModel):
+    type: Literal["LineString"] = "LineString"
+    coordinates: List[List[float]] = Field(
+        ...,
+        min_length=2,
+        description="Coordinates for LineString [[lon, lat], ...]",
+    )
+
+
 class MultiPolygonGeometry(BaseModel):
     type: Literal["MultiPolygon"] = "MultiPolygon"
     coordinates: List[List[List[List[float]]]] = Field(
@@ -31,7 +40,8 @@ class MultiPolygonGeometry(BaseModel):
     )
 
 
-GeometryType = Union[PointGeometry, PolygonGeometry, MultiPolygonGeometry]
+GeometryType = Union[PointGeometry, LineStringGeometry, PolygonGeometry, MultiPolygonGeometry]
+
 
 
 class CanonicalEventProperties(BaseModel):

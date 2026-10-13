@@ -1,23 +1,24 @@
 # Rotterdam Live API — Master Architectural Specification & Implementation Status
 
 > [!NOTE]
-> **Platform Version:** 1.9.0 (The Crowdness Engine & Real-Time Forecaster: Diurnal Priors, Gaussian Event Surges, Weather Shifts & Autoregressive Projections)  
+> **Platform Version:** 2.0.0-rc (Real-Time Traffic Engine & Mobility Subsystem: Rotterdam Ring Motorways, Urban Arterials, PostGIS LineStrings, Congestion Tiers, Delay Matrix & ETag 304 Caching)  
 > **Environment:** Hetzner Cloud Linux VPS (Rotterdam Dockerized Stack)  
 > **Backend Repository:** [`github.com/Linekai5/rotterdam-live-api`](https://github.com/Linekai5/rotterdam-live-api) (Private, main branch synced)  
 > **Frontend Repository:** [`github.com/Linekai5/Rott-live`](https://github.com/Linekai5/Rott-live) (Private, main branch synced)  
-> **Architectural Invariant:** Sub-30ms GeoJSON API response times (sub-5ms cached in Redis), zero synchronous external API queries or spatial/mathematical computations during client HTTP requests, automated PostGIS municipal district validation, strict RFC 7946 GeoJSON compliance.
+> **Architectural Invariant:** Sub-30ms GeoJSON API response times (sub-5ms cached in Redis), zero synchronous external API queries or spatial/mathematical computations during client HTTP requests, automated PostGIS municipal district validation, strict RFC 7946 GeoJSON compliance with LineString corridors.
 
 ---
 
 ## 1. Executive Summary & Core Architecture
 
-The **Rotterdam Live API** (`rotterdam-live-api`) is an asynchronous, high-throughput geospatial platform engineered to power the real-time situational map of Rotterdam (`rott-live`). It serves as the single source of truth for all situational, municipal, commercial, environmental, meteorological, cultural event, and crowdness intelligence across the municipality of Rotterdam (Gemeentecode `0599`).
+The **Rotterdam Live API** (`rotterdam-live-api`) is an asynchronous, high-throughput geospatial platform engineered to power the real-time situational map of Rotterdam (`rott-live`). It serves as the single source of truth for all situational, municipal, commercial, environmental, meteorological, cultural event, crowdness, and traffic intelligence across the municipality of Rotterdam (Gemeentecode `0599`).
 
 The database currently holds **over 396,400 spatial records** indexed with PostGIS GiST and PostgreSQL `pg_trgm` GIN indexes.
 
 ```mermaid
 flowchart TD
     subgraph "External Feeds & Ingestion Sources (100% Asynchronous Ingestion)"
+        NDW_FEED["NDW & RWS Open Traffic Feeds (Speeds, Travel Times, Delays)"]
         TM_FEED["Ticketmaster Discovery API v2 (Ahoy, De Doelen, Luxor, etc.)"]
         STAD_FEED["Stadium Fixtures iCal (De Kuip, Het Kasteel, Woudestein)"]
         FEST_FEED["Rotterdam Municipal Festivals & Open Cultural Agendas"]
@@ -39,6 +40,7 @@ flowchart TD
 
     subgraph "Ingestion Worker (worker.py / APScheduler)"
         SCHED["APScheduler Orchestrator (AsyncIOScheduler)"]
+        TRAFFIC_HARV["RotterdamTrafficHarvester (60s Cycle: Ring & Arterial Corridors, NDW Feeds & Diurnal Models)"]
         CROWD_HARV["RotterdamCrowdHarvester (10m Cycle: Baselines, Gaussian Surges, Residual Projections)"]
         EVENTS_HARV["RotterdamEventsHarvester (Ticketmaster + Stadiums + Festivals)"]
         BAG_HARV["RotterdamBAGHarvester (Multi-Prefix WFS)"]
@@ -56,22 +58,22 @@ flowchart TD
     end
 
     subgraph "Database & Cache Layer"
-        PG[("PostgreSQL 16 + PostGIS 3.4\n- rotterdam_addresses: 382,814 rows\n- city_amenities: 10,136 rows\n- rotterdam_retail: 2,950 rows\n- rotterdam_events: 384 verified events\n- crowd_telemetry_history: 15m Snapshots\n- district_demographics: 19 rows\n- district_housing_metrics: 19 rows\n- live_events: ~780 real-time rows\n- rotterdam_districts: 19 polygons\n(Spatial GiST, Composite & pg_trgm GIN Indexes)")]
+        PG[("PostgreSQL 16 + PostGIS 3.4\n- city_traffic_segments: 18 LineString Corridors\n- rotterdam_addresses: 382,814 rows\n- city_amenities: 10,136 rows\n- rotterdam_retail: 2,950 rows\n- rotterdam_events: 384 verified events\n- crowd_telemetry_history: 15m Snapshots\n- district_demographics: 19 rows\n- district_housing_metrics: 19 rows\n- live_events: ~780 real-time rows\n- rotterdam_districts: 19 polygons\n(Spatial GiST, Composite & pg_trgm GIN Indexes)")]
         REDIS[("Redis 7 In-Memory Cache\nTTL: 15s - 86400s\nSub-5ms Cache Responses")]
     end
 
     subgraph "API Service (FastAPI / Uvicorn)"
-        API["FastAPI Routing Engine (/api/v1)\nSub-30ms RFC 7946 GeoJSON\nCrowdness Engine & Real-Time Forecaster\nEvents Domain Engine\nDistrict Passport Engine\nUnified Global Search Engine"]
+        API["FastAPI Routing Engine (/api/v1)\nSub-30ms RFC 7946 GeoJSON\nTraffic & Arterials Mobility Engine\nCrowdness Engine & Real-Time Forecaster\nEvents Domain Engine\nDistrict Passport Engine\nUnified Global Search Engine"]
     end
 
     subgraph "Frontend Client"
-        WEB["MapLibre GL + Svelte (Rott-live)\nVector Tile Base + Crowdness Choropleth + Events & Passports"]
+        WEB["MapLibre GL + Svelte (Rott-live)\nVector Tile Base + Traffic Flow Lines + Crowdness Choropleth + Events & Passports"]
     end
 
-    TM_FEED & STAD_FEED & FEST_FEED & P2000_FEED & RWS_FEED & MUN_FEED & STEDIN_FEED & BAG_FEED & OSM_FEED & WEATHER_FEED & RADAR_FEED & PDOK_FEED & DCMR_FEED & DONKEY_FEED & OPENOV_FEED & NEWS_FEED & CBS_FEED --> SCHED
-    SCHED --> CROWD_HARV & EVENTS_HARV & BAG_HARV & RETAIL_HARV & WEATHER_HARV & CAM_HARV & AMEN_INGEST & MOB_INGEST & ROAD_INGEST & UTIL_INGEST & P2000_INGEST & NEWS_INGEST & SPATIAL_INGEST & LIVING_HARV
-    CROWD_HARV & EVENTS_HARV & BAG_HARV & RETAIL_HARV & WEATHER_HARV & CAM_HARV & AMEN_INGEST & MOB_INGEST & ROAD_INGEST & UTIL_INGEST & P2000_INGEST & NEWS_INGEST & SPATIAL_INGEST & LIVING_HARV --> PG
-    CROWD_HARV --> REDIS
+    NDW_FEED & TM_FEED & STAD_FEED & FEST_FEED & P2000_FEED & RWS_FEED & MUN_FEED & STEDIN_FEED & BAG_FEED & OSM_FEED & WEATHER_FEED & RADAR_FEED & PDOK_FEED & DCMR_FEED & DONKEY_FEED & OPENOV_FEED & NEWS_FEED & CBS_FEED --> SCHED
+    SCHED --> TRAFFIC_HARV & CROWD_HARV & EVENTS_HARV & BAG_HARV & RETAIL_HARV & WEATHER_HARV & CAM_HARV & AMEN_INGEST & MOB_INGEST & ROAD_INGEST & UTIL_INGEST & P2000_INGEST & NEWS_INGEST & SPATIAL_INGEST & LIVING_HARV
+    TRAFFIC_HARV & CROWD_HARV & EVENTS_HARV & BAG_HARV & RETAIL_HARV & WEATHER_HARV & CAM_HARV & AMEN_INGEST & MOB_INGEST & ROAD_INGEST & UTIL_INGEST & P2000_INGEST & NEWS_INGEST & SPATIAL_INGEST & LIVING_HARV --> PG
+    TRAFFIC_HARV & CROWD_HARV --> REDIS
     PG --> API
     REDIS <--> API
     API --> WEB
@@ -85,22 +87,73 @@ The production platform runs on an internal Docker bridge network (`rotterdam_ne
 
 | Container Name | Service | Internal Port | Host Port | Role & Resource Allocation |
 | :--- | :--- | :--- | :--- | :--- |
-| `rotterdam_live_api` | FastAPI / Uvicorn | `8000` | `0.0.0.0:8000` | REST API serving cached GeoJSON, live telemetry, crowdness, events, and search. |
-| `rotterdam_live_worker` | Python Ingestion Worker | — | — | APScheduler background daemon running all 15 ingestion pipelines (including 10m crowd cycle). |
+| `rotterdam_live_api` | FastAPI / Uvicorn | `8000` | `0.0.0.0:8000` | REST API serving cached GeoJSON, live traffic flows, telemetry, crowdness, events, and search. |
+| `rotterdam_live_worker` | Python Ingestion Worker | — | — | APScheduler background daemon running all 16 ingestion pipelines (including 60s traffic and 10m crowd cycles). |
 | `rotterdam_live_db` | PostgreSQL 16 + PostGIS 3.4 | `5432` | `127.0.0.1:5432` | PostGIS spatial database on persistent volume `pgdata`. |
 | `rotterdam_live_redis` | Redis 7 Alpine | `6379` | `127.0.0.1:6379` | In-memory key-value cache and spatial snapshot quantizer on volume `redisdata`. |
 
 ---
 
-## 3. The Production-Grade Crowdness Engine & Real-Time Forecaster (Platform v1.9.0)
+## 3. The Real-Time Traffic Engine & Mobility Subsystem (Platform v2.0.0-rc)
 
 ### Architectural Invariant: Zero In-Request Computation
 The API endpoints return in **< 5ms** from Redis cache (**< 30ms** on cache-miss from indexed tables). 
-**Never compute spatial joins, Gaussian curves, or historical regressions during client HTTP requests.**
-- The background daemon (`rotterdam_live_worker`) handles 100% of the mathematical derivations, live residual logging, and forecast projections every 10 minutes.
-- The API router (`app/api/v1/crowd.py`) strictly reads pre-compiled JSON snapshots from Redis and PostgreSQL.
+**Never compute spatial joins, LineString clipping, or travel time regressions during client HTTP requests.**
+- The background harvester (`RotterdamTrafficHarvester`) polls external NDW feeds and diurnal baseline engines every 60 seconds.
+- Pre-compiles master LineString FeatureCollections and overview statistics directly into Redis (`mobility:traffic:live`, `mobility:traffic:overview`, `mobility:traffic:segment:{id}`).
+- The API router (`app/api/v1/mobility.py`) strictly reads pre-compiled JSON snapshots with RFC 7232 ETag conditional caching.
 
-### Quantitative Model Specification
+### Quantitative Traffic Model & Congestion Tiers
+
+Target metrics:
+- Vehicle Speed: $v \in [0, 130]\text{ km/h}$
+- Speed Ratio: $r = \frac{v}{v_{\text{free}}}$
+- Traversal Duration: $t_{\text{travel}} = \frac{t_{\text{free}}}{\max(0.15, r)}$
+- Traversal Delay: $\text{delay} = \max(0, t_{\text{travel}} - t_{\text{free}})$
+
+**Congestion Severity Tiers:**
+- `free_flow` ($r \ge 0.85$): Fluid conditions, delay $\approx 0$. Color: `#10b981` (Green).
+- `moderate` ($0.60 \le r < 0.85$): Traffic slowing, minor queues. Color: `#f59e0b` (Amber).
+- `heavy` ($0.30 \le r < 0.60$): Major delay, stop-and-go congestion. Color: `#f97316` (Orange).
+- `standstill` ($r < 0.30$): Gridlock / incident blockages. Color: `#ef4444` (Red).
+
+### Monitored Corridors (18 Directional Segments)
+
+1. **The Rotterdam Ring (Motorways / Rijkswegen):**
+   - **A20:** Kleinpolderplein ↔ Terbregseplein (`corridor-a20-eastbound`, `corridor-a20-westbound`)
+   - **A16:** Terbregseplein ↔ Van Brienenoordbrug ↔ Ridderkerk (`corridor-a16-southbound`, `corridor-a16-northbound`)
+   - **A15:** Botlektunnel ↔ Vaanplein ↔ Ridderkerk (`corridor-a15-eastbound`, `corridor-a15-westbound`)
+   - **A4:** Kethelplein ↔ Beneluxtunnel (`corridor-a4-southbound`, `corridor-a4-northbound`)
+   - **A13:** Rotterdam Airport ↔ Kleinpolderplein (`corridor-a13-southbound`, `corridor-a13-northbound`)
+2. **Core Urban Arterials & City Gateways:**
+   - **S100 / Centrumring:** Maasboulevard, Boompjes, Schiedamsedijk, Weena (`corridor-s100-centrumring-clockwise`, `corridor-s100-centrumring-counter`)
+   - **S103:** Stadhoudersweg / Schieweg (`corridor-s103-schieweg-inbound`, `corridor-s103-schieweg-outbound`)
+   - **S102:** Vaanweg / Zuiderparkweg (`corridor-s102-vaanweg-inbound`, `corridor-s102-vaanweg-outbound`)
+   - **Maastunnel Corridor:** Pleinweg ↔ Maastunnel ↔ 's-Gravendijkwal (`corridor-maastunnel-northbound`, `corridor-maastunnel-southbound`)
+
+### Database Table `city_traffic_segments`
+```sql
+CREATE TABLE city_traffic_segments (
+    id VARCHAR(128) PRIMARY KEY,
+    name VARCHAR(256) NOT NULL,
+    road_type VARCHAR(32) NOT NULL, -- motorway, urban_arterial
+    free_flow_seconds INTEGER NOT NULL,
+    current_travel_time_seconds INTEGER NOT NULL,
+    delay_seconds INTEGER NOT NULL,
+    speed_kmh FLOAT NOT NULL,
+    congestion_level VARCHAR(32) NOT NULL, -- free_flow, moderate, heavy, standstill
+    district VARCHAR(128),
+    geom geometry(LineString, 4326) NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX idx_traffic_segments_geom ON city_traffic_segments USING GIST (geom);
+CREATE INDEX idx_traffic_segments_congestion ON city_traffic_segments (congestion_level);
+CREATE INDEX idx_traffic_segments_road_type ON city_traffic_segments (road_type);
+```
+
+---
+
+## 4. The Production-Grade Crowdness Engine & Real-Time Forecaster (Platform v1.9.0)
 
 Target metric: Normalized Crowdness Index $\mathcal{C} \in [0, 100]$.
 - `0 - 25`: Quiet (Rustig)
@@ -108,70 +161,10 @@ Target metric: Normalized Crowdness Index $\mathcal{C} \in [0, 100]$.
 - `51 - 75`: Busy (Druk)
 - `76 - 100`: Saturated / Peak (Zeer druk / Piek)
 
-#### A. Live Observation ($\mathcal{C}_{\text{live}}(d, t_0)$)
-Run by the worker every 10 minutes:
-
-1. **For districts with monitored parking garages ($N_{\text{garages}} > 0$):**
-   $$\text{Occ}(d) = \frac{\sum_{i \in d} \text{occupied}_i}{\sum_{i \in d} \text{capacity}_i} \times 100$$
-   $$\mathcal{C}_{\text{live}}(d, t_0) = \text{Clamp}\Big(0.75 \times \text{Occ}(d) + 0.15 \times \min(N_{\text{p2000}} \times 5, \, 20) + 0.10 \times \min(N_{\text{roads}} \times 5, \, 10) + \text{WeatherShift}_d(t_0), \, 0, \, 100\Big)$$
-2. **For districts without monitored garages ($N_{\text{garages}} == 0$):**
-   $$\mathcal{C}_{\text{live}}(d, t_0) = \text{Clamp}\Big(\hat{\mathcal{C}}_d(t_0) + \min(N_{\text{p2000}} \times 5, \, 20) + \min(N_{\text{roads}} \times 5, \, 10), \, 0, \, 100\Big)$$
-   *(Note: This guarantees $\Delta_d(t_0) \equiv 0$ for sensorless districts unless localized incidents occur).*
-
-#### B. Structural Baseline ($\hat{\mathcal{C}}_d(t)$)
-$$\hat{\mathcal{C}}_d(t) = B_d(\text{dow}, \text{hour}) + \text{EventSurge}_d(t) + \text{WeatherShift}_d(t)$$
-
-1. **Diurnal Baseline ($B_d(\text{dow}, \text{hour}) \in [0, 75]$):**
-   - Calculated via 3-week Exponential Moving Average (EMA) from `crowd_telemetry_history` for $(dow, hour)$ when historical records $\ge 14$ days.
-   - Seeded priors used if historical records $< 14$ days:
-     * *Centrum / Retail:* Saturday peak 65 pts (13:00–17:00), Friday shopping evening 55 pts (18:00–21:00), weekday daytime 35–45 pts, night 10 pts.
-     * *Residential (Noord, Kralingen, etc.):* Morning peak 40 pts (07:30–09:00), evening peak 45 pts (17:00–19:00), night 15 pts.
-     * *Port / Industrial (Waalhaven, Botlek, etc.):* Weekday daytime 35 pts (07:00–16:00), night/weekends 5 pts.
-
-2. **Event Surge with Exact Gaussian Profiles ($\text{EventSurge}_d(t) \in [0, 50]$):**
-   For events in district $d$ or within 1.5 km buffer:
-   $$\text{EventSurge}_d(t) = \min\left(50, \, \sum_{e \in E_d} \text{TierPoints}(e) \times \exp\left( - \frac{(t - t_{\text{peak}, e})^2}{2 \sigma_e^2} \right)\right)$$
-   - **Tier Points:** $\text{HIGH} = 40\text{ pts}$ (Ahoy Arena, De Kuip, Marathon, North Sea Jazz), $\text{MEDIUM} = 20\text{ pts}$ (Luxor, De Doelen, Het Kasteel, Woudestein, Maassilo), $\text{LOW} = 8\text{ pts}$ (Rotown, local halls).
-   - **Gaussian Temporal Parameters:**
-     * *Stadium Matches (Football):* $t_{\text{peak}} = t_{\text{start}} + 45\text{ min}$, $\sigma = 50\text{ min}$.
-     * *Concerts & Theatres (Ahoy / Luxor):* $t_{\text{peak}} = t_{\text{start}}$, $\sigma = 75\text{ min}$.
-     * *Festivals & Outdoor Events:* $t_{\text{peak}} = t_{\text{start}} + (\text{duration} / 2)$, $\sigma = 180\text{ min}$.
-     * *Default / Other:* $t_{\text{peak}} = t_{\text{start}}$, $\sigma = 60\text{ min}$.
-
-3. **Weather Shift ($\text{WeatherShift}_d(t) \in [-15, +15]$ hard points):**
-   - Rain $> 2.5\text{ mm/h}$: $-10\text{ pts}$ for outdoor districts; $+10\text{ pts}$ for indoor shopping hubs (Centrum, Zuidplein / Charlois).
-   - Moderate rain ($0.5 - 2.5\text{ mm/h}$): $-5\text{ pts}$ outdoor, $+5\text{ pts}$ indoor hubs.
-   - Pleasant ($18 - 25^\circ\text{C}$, dry, wind $< 4\text{ Bft}$): $+10\text{ pts}$ for recreational/terrace hubs (Centrum, Kralingen-Crooswijk).
-
-#### C. Autoregressive Horizon Projection ($h \ge 0$)
-1. **Live Residual at $t_0$:**
-   $$\Delta_d(t_0) = \mathcal{C}_{\text{live}}(d, t_0) - \hat{\mathcal{C}}_d(t_0)$$
-2. **Forecast at Horizon $h$ hours ($t = t_0 + h$):**
-   $$\mathcal{C}_d(t_0 + h) = \text{Clamp}\Big(\hat{\mathcal{C}}_d(t_0 + h) + \Delta_d(t_0) \times e^{-0.5 h}, \, 0, \, 100\Big)$$
-   *(Strictly guarantees that at $h=0$, $\mathcal{C}_d(t_0) \equiv \mathcal{C}_{\text{live}}(d, t_0)$ with zero double counting).*
-
----
-
-## 4. Database Schema & Hard Constraints
-
-### `crowd_telemetry_history`
-```sql
-CREATE TABLE crowd_telemetry_history (
-    id BIGSERIAL PRIMARY KEY,
-    district VARCHAR(128) NOT NULL,
-    timestamp TIMESTAMPTZ NOT NULL, -- Truncated to 15-minute slot
-    crowd_index FLOAT NOT NULL,
-    crowd_status VARCHAR(64) NOT NULL,
-    parking_occupancy_avg_pct FLOAT,
-    active_events_count INTEGER DEFAULT 0 NOT NULL,
-    precipitation_mm_h FLOAT DEFAULT 0.0 NOT NULL,
-    temperature_c FLOAT,
-    details JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-    CONSTRAINT uq_crowd_hist_district_time UNIQUE (district, timestamp)
-);
-CREATE INDEX idx_crowd_hist_district_time ON crowd_telemetry_history (district, timestamp DESC);
-```
+### Quantitative Model Specification
+- **Live Residual:** $\Delta_d(t_0) = \mathcal{C}_{\text{live}}(d, t_0) - \hat{\mathcal{C}}_d(t_0)$
+- **Horizon Forecast:** $\mathcal{C}_d(t_0 + h) = \text{Clamp}\Big(\hat{\mathcal{C}}_d(t_0 + h) + \Delta_d(t_0) \times e^{-0.5 h}, \, 0, \, 100\Big)$
+- **Strict Invariant:** At $h=0$, $\mathcal{C}_d(t_0) \equiv \mathcal{C}_{\text{live}}(d, t_0)$ with zero double-counting.
 
 ---
 
@@ -179,7 +172,17 @@ CREATE INDEX idx_crowd_hist_district_time ON crowd_telemetry_history (district, 
 
 All endpoints return RFC 7946 GeoJSON or structured JSON. Responses are cached in Redis with sub-5ms performance (< 30ms on database cache miss).
 
-### A. Crowdness Engine & Forecaster (`/api/v1/crowd`)
+### A. Traffic & Mobility Subsystem (`/api/v1/mobility`)
+
+| Endpoint | Method | Description | Cache TTL |
+| :--- | :--- | :--- | :--- |
+| `/api/v1/mobility/traffic` | `GET` | **Master Live Traffic GeoJSON FeatureCollection**: 18 LineString corridors with speeds, travel times, delays, and congestion tiers. Filter by `road_type`, `congestion_level`, `district`, `bbox`. ETag 304 supported. Sub-5ms cached. | 180s (3m) |
+| `/api/v1/mobility/traffic/overview` | `GET` | Municipal traffic summary: corridor counts by congestion tier, average motorway & arterial speeds, total delay minutes, most congested corridor. ETag 304 supported. | 180s (3m) |
+| `/api/v1/mobility/traffic/{segment_id}` | `GET` | Single corridor performance indicators and LineString geometry by ID (e.g., `corridor-a16-southbound`). | 180s (3m) |
+| `/api/v1/mobility` | `GET` | Unified mobility feed: parking garages, movable bridges, shared bikes (GBFS), and transit alerts. | 15s |
+| `/api/v1/mobility/roadworks` | `GET` | Active road closures, lane disruptions, and municipal roadwork permits from VGW. | 300s (5m) |
+
+### B. Crowdness Engine & Forecaster (`/api/v1/crowd`)
 
 | Endpoint | Method | Description | Cache TTL |
 | :--- | :--- | :--- | :--- |
@@ -189,7 +192,7 @@ All endpoints return RFC 7946 GeoJSON or structured JSON. Responses are cached i
 | `/api/v1/crowd/history` | `GET` | Historical crowd telemetry from indexed `crowd_telemetry_history` table (`district`, `hours`, `limit`). Sub-30ms execution. | 300s (5m) |
 | `/api/v1/crowd/overview` | `GET` | Municipal summary: citywide average crowd index, busiest district, quietest district, garage occupancy %. | 900s (15m) |
 
-### B. Events, Stadiums & Cultural Agendas (`/api/v1/events`)
+### C. Events, Stadiums & Cultural Agendas (`/api/v1/events`)
 
 | Endpoint | Method | Description | Cache TTL |
 | :--- | :--- | :--- | :--- |
@@ -200,7 +203,7 @@ All endpoints return RFC 7946 GeoJSON or structured JSON. Responses are cached i
 | `/api/v1/events/stats` | `GET` | Aggregate event counts by subcategory, data provider, district, and top venues. | 300s (5m) |
 | `/api/v1/events/{event_id}` | `GET` | Single event detail RFC 7946 GeoJSON Feature by unique ID. | 600s (10m) |
 
-### C. Demographics, Housing & District Passports (`/api/v1/living`)
+### D. Demographics, Housing & District Passports (`/api/v1/living`)
 
 | Endpoint | Method | Description | Cache TTL |
 | :--- | :--- | :--- | :--- |
@@ -209,14 +212,12 @@ All endpoints return RFC 7946 GeoJSON or structured JSON. Responses are cached i
 | `/api/v1/living/housing` | `GET` | Housing analytics per district: residential units, avg/median $m^2$, era splits, WOZ. | 3600s (1h) |
 | `/api/v1/living/districts/{district_name}/passport` | `GET` | **Unified District Passport**: Consolidated RFC 7946 GeoJSON Feature. | 3600s (1h) |
 
-### D. Situational Live Feed, Mobility, Weather & Baseline Domains
+### E. Situational Live Feed, Weather & Spatial Baselines
 
 | Endpoint | Method | Description |
 | :--- | :--- | :--- |
 | `/api/v1/live` | `GET` | Unified multi-layer situational feed (emergencies, mobility, weather, events, crowd). |
 | `/api/v1/emergencies` | `GET` | Real-time P2000 112 emergency dispatches (Brandweer, Ambulance, Politie). |
-| `/api/v1/mobility/parking` | `GET` | Real-time occupancy of municipal and commercial parking garages. |
-| `/api/v1/mobility/bridges` | `GET` | Real-time status of Rotterdam movable bridges (Erasmusbrug, Willemsbrug). |
 | `/api/v1/weather/live` | `GET` | Current weather overview (temp, rain nowcast, stations, radar tile). |
 | `/api/v1/spatial/districts` | `GET` | Canonical CBS/PDOK polygons of the 19 Rotterdam municipal districts. |
 
@@ -229,9 +230,10 @@ Orchestrated by [`scheduler.py`](file:///home/homeaccount/rotterdam-live-api/app
 ```mermaid
 flowchart LR
     subgraph "High-Frequency Loops (30s - 1m)"
-        P2000["P2000 Emergencies (30s)"]
+        TRAFFIC_LOOP["Traffic Engine Harvester (60s)"]
+        P2000["P2000 Emergencies (45s)"]
         GARAGES["Parking Garages (60s)"]
-        BRIDGES["Movable Bridges (60s)"]
+        BRIDGES["Movable Bridges (120s)"]
     end
 
     subgraph "Nowcast & Radar Loops (5m)"
@@ -262,7 +264,31 @@ flowchart LR
 
 ## 7. Frontend Integration Guide (Svelte & MapLibre GL)
 
-### Consuming the /crowd Domain in Svelte & MapLibre GL
+### Consuming the /mobility/traffic Domain
+```javascript
+import { 
+  fetchLiveTraffic, 
+  fetchTrafficOverview, 
+  fetchTrafficSegment,
+  installTrafficMapLayer,
+  setTrafficVisibility 
+} from '$lib/trafficClient.js';
+
+// 1. Fetch master traffic GeoJSON across Ring & arterials (< 5ms)
+const trafficGeoJSON = await fetchLiveTraffic({ road_type: 'motorway' });
+
+// 2. Install interactive vector LineString flow layer on MapLibre GL
+installTrafficMapLayer(map);
+
+// 3. Fetch municipal traffic overview telemetry
+const overview = await fetchTrafficOverview();
+console.log(overview.average_speed_kmh, overview.total_delay_minutes, overview.most_congested_corridor);
+
+// 4. Toggle visibility dynamically
+setTrafficVisibility(map, true);
+```
+
+### Consuming the /crowd Domain
 ```javascript
 import { 
   fetchLiveCrowdness, 
@@ -271,53 +297,45 @@ import {
   installCrowdMapLayer 
 } from '$lib/crowdClient.js';
 
-// 1. Fetch master crowdness GeoJSON across all 19 districts (< 5ms)
+// Fetch master crowdness GeoJSON across all 19 districts (< 5ms)
 const crowdGeoJSON = await fetchLiveCrowdness();
-
-// 2. Install interactive choropleth layer on MapLibre GL
 installCrowdMapLayer(map, { opacity: 0.5 });
-
-// 3. Fetch single district profile with 24-hour horizon forecast series
-const profile = await fetchDistrictCrowdProfile('Centrum');
-console.log(profile.crowd_index, profile.crowd_status, profile.forecast);
-
-// 4. Fetch forecast matrix
-const forecast = await fetchCrowdForecast('Feijenoord');
 ```
 
 ---
 
 ## 8. Automated Test Suite & Quality Assurance
 
-All 75 automated tests run inside the container with clean connection pooling and event loop isolation (`tests/conftest.py`):
+All 84 automated tests run inside the container with clean connection pooling and event loop isolation (`tests/conftest.py`):
 
 ```text
 ============================= test session starts ==============================
 rootdir: /app, configfile: pyproject.toml, testpaths: tests
 plugins: anyio-4.15.1, asyncio-1.4.0
 
-tests/test_addresses.py .....                                            [  6%]
-tests/test_api_endpoints.py ....                                         [ 12%]
-tests/test_crowd.py .................                                    [ 34%]
-tests/test_events.py ...........                                         [ 49%]
-tests/test_geocoding.py ....                                             [ 54%]
-tests/test_ingestion_parsers.py ...                                      [ 58%]
-tests/test_live_ingestion_smoke.py .....                                 [ 65%]
-tests/test_living.py ........                                            [ 76%]
-tests/test_retail.py .....                                               [ 82%]
-tests/test_schemas.py ...                                                [ 86%]
-tests/test_search.py ...                                                 [ 90%]
+tests/test_addresses.py .....                                            [  5%]
+tests/test_api_endpoints.py ....                                         [ 10%]
+tests/test_crowd.py .................                                    [ 30%]
+tests/test_events.py ...........                                         [ 44%]
+tests/test_geocoding.py ....                                             [ 48%]
+tests/test_ingestion_parsers.py ...                                      [ 52%]
+tests/test_live_ingestion_smoke.py .....                                 [ 58%]
+tests/test_living.py ........                                            [ 67%]
+tests/test_retail.py .....                                               [ 73%]
+tests/test_schemas.py ...                                                [ 77%]
+tests/test_search.py ...                                                 [ 80%]
+tests/test_traffic.py .........                                          [ 91%]
 tests/test_weather.py .......                                            [100%]
 
-============================== 75 passed in 5.02s ==============================
+============================== 84 passed in 7.99s ==============================
 ```
 
-* **Pass Rate:** **100% (75 passed, 0 failed, 0 warnings)**
-* **Execution Time:** ~5.02 seconds
+* **Pass Rate:** **100% (84 passed, 0 failed, 0 warnings)**
+* **Execution Time:** ~7.99 seconds
 
 ---
 
 ## 9. Repository & Git Status
 
-* **Backend Repository:** [`github.com/Linekai5/rotterdam-live-api`](https://github.com/Linekai5/rotterdam-live-api) (Private, `main` branch)
-* **Frontend Repository:** [`github.com/Linekai5/Rott-live`](https://github.com/Linekai5/Rott-live) (Private, `main` branch)
+* **Backend Repository:** [`github.com/Linekai5/rotterdam-live-api`](https://github.com/Linekai5/rotterdam-live-api) (Private, `main` branch synced)
+* **Frontend Repository:** [`github.com/Linekai5/Rott-live`](https://github.com/Linekai5/Rott-live) (Private, `main` branch synced)

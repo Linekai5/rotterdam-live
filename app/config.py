@@ -81,6 +81,7 @@ class Settings(BaseSettings):
     TICKETMASTER_CONSUMER_SECRET: str = ""
     EVENTS_POLL_INTERVAL_SECONDS: int = 1800
     CROWD_POLL_INTERVAL_SECONDS: int = 600
+    TRAFFIC_POLL_INTERVAL_SECONDS: int = 60
 
     # Geospatial Constants
     ROTTERDAM_MIN_LON: float = 4.25

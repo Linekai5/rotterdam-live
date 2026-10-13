@@ -23,6 +23,7 @@ from app.ingestion.weather_harvester import RotterdamWeatherHarvester
 from app.ingestion.living_harvester import RotterdamLivingHarvester
 from app.ingestion.events_harvester import RotterdamEventsHarvester
 from app.ingestion.crowd_harvester import RotterdamCrowdHarvester
+from app.ingestion.traffic_harvester import RotterdamTrafficHarvester
 
 
 class IngestionScheduler:
@@ -44,6 +45,7 @@ class IngestionScheduler:
         self.living_harvester = RotterdamLivingHarvester()
         self.events_harvester = RotterdamEventsHarvester()
         self.crowd_harvester = RotterdamCrowdHarvester()
+        self.traffic_harvester = RotterdamTrafficHarvester()
         self._is_running = False
 
     async def _safe_run(self, name: str, coro_func):
@@ -272,6 +274,16 @@ class IngestionScheduler:
             replace_existing=True,
         )
 
+        # 20. Rotterdam Traffic Engine (Ring Motorways & Urban Arterials - every 60s)
+        self.scheduler.add_job(
+            self._safe_run,
+            "interval",
+            seconds=settings.TRAFFIC_POLL_INTERVAL_SECONDS,
+            args=["traffic", self.traffic_harvester.ingest],
+            id="job_traffic_harvester",
+            replace_existing=True,
+        )
+
         self.scheduler.start()
         self._is_running = True
         logger.info("Ingestion Scheduler successfully started.")
@@ -294,6 +306,7 @@ class IngestionScheduler:
         await self._safe_run("living", self.living_harvester.ingest)
         await self._safe_run("events", self.events_harvester.ingest)
         await self._safe_run("crowd", self.crowd_harvester.ingest)
+        await self._safe_run("traffic", self.traffic_harvester.ingest)
         logger.info("Initial bootstrap ingestion pass finished.")
 
     async def stop(self):
@@ -317,6 +330,7 @@ class IngestionScheduler:
             await self.living_harvester.close()
             await self.events_harvester.close()
             await self.crowd_harvester.close()
+            await self.traffic_harvester.close()
             logger.info("Ingestion Scheduler stopped cleanly.")
 
 

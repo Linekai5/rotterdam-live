@@ -89,6 +89,15 @@ async def init_database():
         await conn.execute(
             text("CREATE INDEX IF NOT EXISTS idx_crowd_hist_district_time ON crowd_telemetry_history (district, timestamp DESC);")
         )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_traffic_segments_geom ON city_traffic_segments USING GIST (geom);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_traffic_segments_congestion ON city_traffic_segments (congestion_level);")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_traffic_segments_road_type ON city_traffic_segments (road_type);")
+        )
 
     logger.info("Database schema initialized successfully.")
 
