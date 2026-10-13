@@ -1,0 +1,84 @@
+name: Production Deployment Pipeline
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Zero-Downtime Rolling Production Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure SSH Key
+        if: ${{ env.SSH_KEY != '' }}
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p ${{ secrets.DEPLOY_PORT || 2299 }} ${{ secrets.DEPLOY_HOST || '46.224.227.187' }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Execute Rolling Remote Deployment
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST || '46.224.227.187' }}
+          USER: ${{ secrets.DEPLOY_USER || 'homeaccount' }}
+          PORT: ${{ secrets.DEPLOY_PORT || 2299 }}
+        run: |
+          if [ -z "${{ secrets.DEPLOY_SSH_KEY }}" ]; then
+            echo "DEPLOY_SSH_KEY not configured. Skipping remote trigger."
+            exit 0
+          fi
+
+          ssh -p $PORT $USER@$HOST << 'EOF'
+            set -euo pipefail
+            cd /home/homeaccount/rotterdam-live
+
+            echo "==> Pulling latest repository state..."
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo "==> Pre-building production container images..."
+            docker compose -f docker-compose.prod.yml build --pull
+
+            echo "==> Rolling update: Backend API..."
+            docker compose -f docker-compose.prod.yml up -d --no-deps api
+            
+            echo "==> Awaiting Backend API healthy status..."
+            for i in $(seq 1 30); do
+              if docker compose -f docker-compose.prod.yml exec -T api curl -fsS http://localhost:8000/health/live >/dev/null 2>&1; then
+                echo "API is healthy!"
+                break
+              fi
+              sleep 2
+            done
+
+            echo "==> Rolling update: Frontend Web..."
+            docker compose -f docker-compose.prod.yml up -d --no-deps web
+
+            echo "==> Rolling update: Background Ingestion Worker..."
+            docker compose -f docker-compose.prod.yml up -d --no-deps ingestion_worker
+
+            echo "==> Graceful Nginx configuration reload..."
+            if docker compose -f docker-compose.prod.yml ps nginx | grep -q "Up"; then
+              docker compose -f docker-compose.prod.yml exec -T nginx nginx -s reload
+            else
+              docker compose -f docker-compose.prod.yml up -d --no-deps nginx
+            fi
+
+            echo "==> Verifying live production health..."
+            curl -fsS http://127.0.0.1:8000/health/live
+
+            echo "==> Cleaning stale build artifacts..."
+            docker image prune -f
+
+            echo "==> Deployment completed successfully!"
+          EOF

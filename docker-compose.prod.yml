@@ -1,0 +1,180 @@
+# =============================================================================
+# Rotterdam Live — Production Docker Compose Stack
+# Strict Architectural Invariants:
+# - Public Web Traffic: 46.224.227.187:80:80, 46.224.227.187:443:443
+# - Private Tailscale API Gateway: 100.70.237.40:80:8080
+# - Zero socket conflict via host-level IP binding
+# - Sub-30ms GeoJSON SLA with persistent PostGIS & Redis caching layers
+# =============================================================================
+
+services:
+  db:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.db
+    image: rotterdam_live_postgis:16
+    container_name: rotterdam_live_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rotterdamlive_secret_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-rotterdamlive}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-rotterdamlive}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - rotterdam_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: rotterdam_live_redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redisdata:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rotterdam_net
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    image: rotterdam_live_api:latest
+    container_name: rotterdam_live_api
+    restart: unless-stopped
+    env_file:
+      - ./api/.env
+    environment:
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: "1"
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-rotterdamlive_secret_2026}@db:5432/${POSTGRES_DB:-rotterdamlive}
+      DATABASE_URL_SYNC: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-rotterdamlive_secret_2026}@db:5432/${POSTGRES_DB:-rotterdamlive}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./api:/app
+    ports:
+      - "127.0.0.1:8000:8000"
+    command: >
+      sh -c "python scripts/init_db.py &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2 --proxy-headers"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - rotterdam_net
+
+  ingestion_worker:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    image: rotterdam_live_api:latest
+    container_name: rotterdam_live_worker
+    restart: unless-stopped
+    env_file:
+      - ./api/.env
+    environment:
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: "1"
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-rotterdamlive_secret_2026}@db:5432/${POSTGRES_DB:-rotterdamlive}
+      DATABASE_URL_SYNC: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-rotterdamlive_secret_2026}@db:5432/${POSTGRES_DB:-rotterdamlive}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./api:/app
+    command: python worker.py
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - rotterdam_net
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: rotterdam_live_web:latest
+    container_name: rotterdam_live_web
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:80/ > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - rotterdam_net
+
+  nginx:
+    image: nginx:stable-alpine
+    container_name: rotterdam_live_nginx
+    restart: unless-stopped
+    ports:
+      # Public Web Traffic (rotterdamlive.nl, www.rotterdamlive.nl)
+      - "46.224.227.187:80:80"
+      - "46.224.227.187:443:443"
+      # Private API Gateway over Tailscale (api.rotterdamlive.nl)
+      - "100.70.237.40:80:8080"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health/live > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - rotterdam_net
+
+  certbot:
+    image: certbot/certbot:latest
+    container_name: rotterdam_live_certbot
+    restart: unless-stopped
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done;'"
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    depends_on:
+      - nginx
+    networks:
+      - rotterdam_net
+
+volumes:
+  pgdata:
+    name: rotterdam_live_pgdata
+  redisdata:
+    name: rotterdam_live_redisdata
+  certbot_www:
+    name: rotterdam_live_certbot_www
+
+networks:
+  rotterdam_net:
+    name: rotterdam_live_network
+    driver: bridge
