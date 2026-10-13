@@ -135,8 +135,10 @@ services:
       - "46.224.227.187:443:443"
       # Private API Gateway over Tailscale (api.rotterdamlive.nl)
       - "100.70.237.40:80:8080"
+      - "100.70.237.40:443:8443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - certbot_www:/var/www/certbot:ro
     depends_on:
