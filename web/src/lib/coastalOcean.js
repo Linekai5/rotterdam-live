@@ -181,8 +181,9 @@ export function installCoastalOcean(map) {
       const image = await distanceImage();
       if (removed || !map.getStyle() || !map.getLayer('satellite-layer') || map.getLayer(OCEAN_LAYER)) return;
       const firstLabel = map.getStyle().layers.find(layer => layer.type === 'symbol')?.id;
-      map.addLayer(new CoastalOcean(image, true), firstLabel);
-      map.addLayer(new CoastalOcean(image));
+      const weatherLayerId = map.getLayer('rotterdam-volumetric-weather') ? 'rotterdam-volumetric-weather' : undefined;
+      map.addLayer(new CoastalOcean(image, true), firstLabel || weatherLayerId);
+      map.addLayer(new CoastalOcean(image), weatherLayerId);
       map.setLayoutProperty('rotterdam-water-mask', 'visibility', 'none');
     } catch (error) {
       if (map.getLayer(OCEAN_LAYER)) map.removeLayer(OCEAN_LAYER);
