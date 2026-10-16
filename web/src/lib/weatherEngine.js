@@ -567,13 +567,12 @@ const FRAGMENT_SHADER_SOURCE = `
   }
 
   // Shared low-frequency organic domain warp (computed ONCE per pixel and reused by
-  // every altitude slice — includes subtle time evolution so clouds gently billow & morph).
+  // every altitude slice — the warp field is smooth so per-slice recomputation is wasted).
   vec2 cloudDomainWarp(vec2 posKm, vec2 windAdvectKm) {
-    vec2 p = posKm * 0.26 + windAdvectKm * 0.85;
-    vec2 drift = vec2(u_time * 0.016, -u_time * 0.012);
+    vec2 p = posKm * 0.26 + windAdvectKm;
     return vec2(
-      fbm3(p * 0.75 + drift + vec2(1.7, 9.2)),
-      fbm3(p * 0.75 - drift * 0.8 + vec2(8.3, 2.8))
+      fbm3(p * 0.75 + vec2(1.7, 9.2)),
+      fbm3(p * 0.75 + vec2(8.3, 2.8))
     ) - 0.5;
   }
 
@@ -599,9 +598,8 @@ const FRAGMENT_SHADER_SOURCE = `
     if (rawEnvelope <= 0.001) return 0.0;
 
     // Multi-octave Worley cellular cauliflower billows carved into the cloud body & perimeter
-    vec2 billowMorph = vec2(u_time * 0.022, -u_time * 0.018);
-    float billowCoarse = worleyBillow(wPos * 2.15 + billowMorph + vec2(heightFrac * 0.35, -heightFrac * 0.25));
-    float billowFine = worleyBillow(wPos * 4.70 - billowMorph * 1.3 - vec2(heightFrac * 0.50, heightFrac * 0.40));
+    float billowCoarse = worleyBillow(wPos * 2.15 + vec2(heightFrac * 0.35, -heightFrac * 0.25));
+    float billowFine = worleyBillow(wPos * 4.70 - vec2(heightFrac * 0.50, heightFrac * 0.40));
     float cauliflower = billowCoarse * 0.64 + billowFine * 0.36;
     float sculpted = rawEnvelope * (0.58 + 0.42 * cauliflower) - (1.0 - cauliflower) * 0.22 * (1.0 - rawEnvelope);
     return clamp(smoothstep(0.08, 0.78, sculpted), 0.0, 1.0);
@@ -711,12 +709,9 @@ const FRAGMENT_SHADER_SOURCE = `
     float fogDensity = windStormFog.a;
 
     // In localMeters: +x is East, +y is South (so Northward wind v > 0 moves toward -y).
-    // Apply a perceptual baseline floor so even light 8-10 km/h breezes visibly glide across Rotterdam
-    // in real time, while strong gusts & squalls accelerate proportionally.
-    float rawSpeedMs = length(windMs);
-    vec2 windUnit = rawSpeedMs > 0.05 ? (vec2(-windMs.x, windMs.y) / rawSpeedMs) : vec2(-0.85, 0.52);
-    float perceptualSpeed = (max(3.6, rawSpeedMs) + rawSpeedMs * 0.85) * 0.024;
-    vec2 windAdvectKm = windUnit * (u_time * perceptualSpeed);
+    // Natural real-time wind advection: clouds glide smoothly and gently across Rotterdam
+    // along the live KNMI wind vector at a believable, real-life pace.
+    vec2 windAdvectKm = vec2(-windMs.x, windMs.y) * (u_time * 0.005);
 
     // 3. Phase 4 Altitude Zoom-Fade ("Dive Through the Clouds" Mechanics)
     float baseAltitudeAlpha = smoothstep(14.2, 12.0, u_zoom);
