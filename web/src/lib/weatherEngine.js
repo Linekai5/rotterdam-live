@@ -540,50 +540,84 @@ const FRAGMENT_SHADER_SOURCE = `
     return val;
   }
 
-  // Sculpted Cumulus & Nimbostratus Density Slice with Worley Cauliflower Edge Erosion
-  // Returns density in [0..1] for a given horizontal world position (in km) and vertical slice fraction [0..1]
-  float evaluateVolumetricCloudSlice(vec2 posKm, vec2 windAdvectKm, float coverage, float heightFrac) {
-    if (coverage <= 0.015) return 0.0;
+  // Performance: 4- and 3-octave FBM variants (clouds are rendered at reduced
+  // resolution, so the 5th octave is sub-pixel and wasted work).
+  float fbm4(vec2 p) {
+    float val = 0.0;
+    float amp = 0.54;
+    mat2 rot = mat2(0.80, -0.60, 0.60, 0.80);
+    for (int i = 0; i < 4; i++) {
+      val += amp * valueNoise(p);
+      p = rot * p * 2.03 + vec2(17.1, 31.7);
+      amp *= 0.5;
+    }
+    return val;
+  }
 
-    // Advect coordinate in km (+x = East, +y = South; windMs.y > 0 is Northward = -y)
+  float fbm3(vec2 p) {
+    float val = 0.0;
+    float amp = 0.57;
+    mat2 rot = mat2(0.80, -0.60, 0.60, 0.80);
+    for (int i = 0; i < 3; i++) {
+      val += amp * valueNoise(p);
+      p = rot * p * 2.03 + vec2(17.1, 31.7);
+      amp *= 0.5;
+    }
+    return val;
+  }
+
+  // Shared low-frequency organic domain warp (computed ONCE per pixel and reused by
+  // every altitude slice — the warp field is smooth so per-slice recomputation is wasted).
+  vec2 cloudDomainWarp(vec2 posKm, vec2 windAdvectKm) {
     vec2 p = posKm * 0.26 + windAdvectKm;
-
-    // Stage 1: Organic curl/domain warp for fluid atmospheric motion
-    vec2 warp = vec2(
-      fbm5(p * 0.75 + vec2(1.7, 9.2)),
-      fbm5(p * 0.75 + vec2(8.3, 2.8))
+    return vec2(
+      fbm3(p * 0.75 + vec2(1.7, 9.2)),
+      fbm3(p * 0.75 + vec2(8.3, 2.8))
     ) - 0.5;
-    vec2 wPos = p + warp * 0.85;
+  }
 
-    // Stage 2: Macro weather fronts & cloud clusters (leaves natural clear-sky gaps)
-    float macroSystem = fbm5(wPos * 0.52 + vec2(3.1, 7.4));
-    float mesoCluster = fbm5(wPos * 1.25 - warp * 0.45);
+  // Macro weather fronts & meso cloud clusters -> soft cloud envelope [0..1]
+  float cloudEnvelope(vec2 wPos, vec2 warp, float coverage, float heightFrac) {
+    float macroSystem = fbm4(wPos * 0.52 + vec2(3.1, 7.4));
+    float mesoCluster = fbm4(wPos * 1.25 - warp * 0.45);
     float baseShape = macroSystem * 0.58 + mesoCluster * 0.42;
-
-    // Stage 3: Multi-octave Worley cellular cauliflower billows
-    float billowCoarse = worleyBillow(wPos * 2.15 + vec2(heightFrac * 0.35, -heightFrac * 0.25));
-    float billowFine = worleyBillow(wPos * 4.70 - vec2(heightFrac * 0.50, heightFrac * 0.40));
-    float cauliflower = billowCoarse * 0.64 + billowFine * 0.36;
-
-    // Erode cloud perimeter with cellular billows so edges look like crisp cumulus puffs
-    // rather than flat blurry Perlin fog
     float cov = clamp(coverage, 0.0, 1.0);
     float coverageThreshold = mix(0.66, 0.34, pow(cov, 0.85));
     // Higher slices taper inward to form 3D rounded cumulus domes & towering tops
     float verticalTaper = heightFrac * (1.0 - cov * 0.35) * 0.13;
-    float rawEnvelope = smoothstep(coverageThreshold + verticalTaper, coverageThreshold + verticalTaper + 0.26, baseShape);
+    return smoothstep(coverageThreshold + verticalTaper, coverageThreshold + verticalTaper + 0.26, baseShape);
+  }
 
-    // Carve cauliflower billow detail into the cloud body and perimeter
+  // Sculpted Cumulus & Nimbostratus Density Slice with Worley Cauliflower Edge Erosion
+  // Returns density in [0..1] for a given horizontal world position (in km) and vertical slice fraction [0..1]
+  float evaluateVolumetricCloudSlice(vec2 posKm, vec2 windAdvectKm, vec2 warp, float coverage, float heightFrac) {
+    if (coverage <= 0.015) return 0.0;
+    vec2 wPos = posKm * 0.26 + windAdvectKm + warp * 0.85;
+    float rawEnvelope = cloudEnvelope(wPos, warp, coverage, heightFrac);
+    // Early-out in clear sky: skips the expensive Worley billow evaluation entirely
+    if (rawEnvelope <= 0.001) return 0.0;
+
+    // Multi-octave Worley cellular cauliflower billows carved into the cloud body & perimeter
+    float billowCoarse = worleyBillow(wPos * 2.15 + vec2(heightFrac * 0.35, -heightFrac * 0.25));
+    float billowFine = worleyBillow(wPos * 4.70 - vec2(heightFrac * 0.50, heightFrac * 0.40));
+    float cauliflower = billowCoarse * 0.64 + billowFine * 0.36;
     float sculpted = rawEnvelope * (0.58 + 0.42 * cauliflower) - (1.0 - cauliflower) * 0.22 * (1.0 - rawEnvelope);
     return clamp(smoothstep(0.08, 0.78, sculpted), 0.0, 1.0);
+  }
+
+  // Cheap envelope-only sample (no Worley) for soft ground shadows & sun-ward self-shadowing
+  float evaluateCloudEnvelopeFast(vec2 posKm, vec2 windAdvectKm, vec2 warp, float coverage, float heightFrac) {
+    if (coverage <= 0.015) return 0.0;
+    vec2 wPos = posKm * 0.26 + windAdvectKm + warp * 0.85;
+    return smoothstep(0.08, 0.78, cloudEnvelope(wPos, warp, coverage, heightFrac) * 0.79);
   }
 
   // High-altitude sheared ice-crystal Cirrus streaks (H ~ 3100m)
   float evaluateCirrusDeck(vec2 posKm, vec2 windAdvectKm, float coverage) {
     if (coverage <= 0.02) return 0.0;
     vec2 p = posKm * vec2(0.18, 0.34) + windAdvectKm * 1.45 + vec2(14.2, 6.8);
-    float warp = fbm5(p * 0.8);
-    float streak = fbm5(vec2(p.x * 1.8 + warp * 1.4, p.y * 0.65 - warp * 0.6));
+    float warp = fbm3(p * 0.8);
+    float streak = fbm4(vec2(p.x * 1.8 + warp * 1.4, p.y * 0.65 - warp * 0.6));
     float thresh = mix(0.68, 0.42, clamp(coverage, 0.0, 1.0));
     return smoothstep(thresh, thresh + 0.28, streak) * 0.48;
   }
@@ -684,28 +718,29 @@ const FRAGMENT_SHADER_SOURCE = `
     float radialParting = 1.0 - descentProgress * (1.0 - smoothstep(0.0, 1.05, radialDist)) * 0.68;
     float canopyZoomAlpha = max(0.025, baseAltitudeAlpha * radialParting * 0.92 + 0.025 * (1.0 - baseAltitudeAlpha));
 
-    // 4. 4-Slice 3D Volumetric Raymarch Through Cloud Altitudes (950m -> 2050m) + High Cirrus (3100m)
+    // 4. 3-Slice 3D Volumetric Raymarch Through Cloud Altitudes (1000m -> 2050m) + High Cirrus (3100m)
     float effectiveCumulusCov = clamp(max(covLow, covMid * 0.85), 0.0, 1.0);
 
-    vec2 pSlice0Km = projectToAltitudeMeters(groundMeters, 950.0) * 0.001;
-    vec2 pSlice1Km = projectToAltitudeMeters(groundMeters, 1300.0) * 0.001;
-    vec2 pSlice2Km = projectToAltitudeMeters(groundMeters, 1680.0) * 0.001;
-    vec2 pSlice3Km = projectToAltitudeMeters(groundMeters, 2080.0) * 0.001;
+    vec2 pSlice0Km = projectToAltitudeMeters(groundMeters, 1000.0) * 0.001;
+    vec2 pSlice1Km = projectToAltitudeMeters(groundMeters, 1500.0) * 0.001;
+    vec2 pSlice2Km = projectToAltitudeMeters(groundMeters, 2050.0) * 0.001;
     vec2 pCirrusKm = projectToAltitudeMeters(groundMeters, 3100.0) * 0.001;
 
-    float d0 = evaluateVolumetricCloudSlice(pSlice0Km, windAdvectKm, effectiveCumulusCov, 0.10);
-    float d1 = evaluateVolumetricCloudSlice(pSlice1Km, windAdvectKm * 1.06, effectiveCumulusCov, 0.40);
-    float d2 = evaluateVolumetricCloudSlice(pSlice2Km, windAdvectKm * 1.12, effectiveCumulusCov, 0.72);
-    float d3 = evaluateVolumetricCloudSlice(pSlice3Km, windAdvectKm * 1.18, effectiveCumulusCov, 1.00);
+    // One shared domain warp per pixel (smooth field -> reused across all slices)
+    vec2 sharedWarp = cloudDomainWarp(pSlice1Km, windAdvectKm);
+
+    float d0 = evaluateVolumetricCloudSlice(pSlice0Km, windAdvectKm, sharedWarp, effectiveCumulusCov, 0.15);
+    float d1 = evaluateVolumetricCloudSlice(pSlice1Km, windAdvectKm * 1.08, sharedWarp, effectiveCumulusCov, 0.58);
+    float d2 = evaluateVolumetricCloudSlice(pSlice2Km, windAdvectKm * 1.16, sharedWarp, effectiveCumulusCov, 1.00);
     float dCirrus = evaluateCirrusDeck(pCirrusKm, windAdvectKm, covHigh);
 
     // Combine 3D slices into volumetric optical depth and weighted vertical height [0..1]
-    float totalCloudDensity = clamp(1.0 - (1.0 - d0 * 0.45) * (1.0 - d1 * 0.62) * (1.0 - d2 * 0.58) * (1.0 - d3 * 0.48), 0.0, 1.0);
+    float totalCloudDensity = clamp(1.0 - (1.0 - d0 * 0.55) * (1.0 - d1 * 0.68) * (1.0 - d2 * 0.55), 0.0, 1.0);
     totalCloudDensity = clamp(totalCloudDensity + dCirrus * (1.0 - totalCloudDensity * 0.7), 0.0, 1.0);
 
     float weightedHeight = clamp(
-      (d0 * 0.12 + d1 * 0.38 + d2 * 0.74 + d3 * 1.05 + dCirrus * 0.95) /
-      max(0.001, d0 + d1 + d2 + d3 + dCirrus),
+      (d0 * 0.15 + d1 * 0.58 + d2 * 1.02 + dCirrus * 0.95) /
+      max(0.001, d0 + d1 + d2 + dCirrus),
       0.0,
       1.0
     );
@@ -713,7 +748,7 @@ const FRAGMENT_SHADER_SOURCE = `
     // 5. Projected 3D Ground Cloud Shadows on Rotterdam Island & Surrounding Coastal Waters
     // Trace from ground point (Z = 0m) toward the sun to the cloud base altitude (H = 1250m)
     vec2 shadowSampleKm = (groundMeters + u_shadow_offset_meters) * 0.001;
-    float shadowCloud = evaluateVolumetricCloudSlice(shadowSampleKm, windAdvectKm * 1.03, effectiveCumulusCov, 0.32);
+    float shadowCloud = evaluateCloudEnvelopeFast(shadowSampleKm, windAdvectKm * 1.03, sharedWarp, effectiveCumulusCov, 0.32);
     float daylightShadowFactor = smoothstep(-2.0, 10.0, u_sun_elevation_deg);
     float zoomShadowMod = 0.28 + 0.72 * smoothstep(16.5, 11.6, u_zoom);
     // Cast crisp 3D shadows on Rotterdam Island land and slightly softer shadows on the ocean water
@@ -723,9 +758,10 @@ const FRAGMENT_SHADER_SOURCE = `
     // 6. Directional 3D Self-Shadowing, Beer-Lambert Absorption & Henyey-Greenstein Silver Lining
     // Step 450m horizontally toward the sun in localMeters (+x = East, -y = North)
     vec2 sunHorizDirKm = normalize(vec2(u_sun_dir.x, -u_sun_dir.y) + vec2(0.0001)) * 0.55;
-    float densityTowardSun = evaluateVolumetricCloudSlice(
+    float densityTowardSun = evaluateCloudEnvelopeFast(
       pSlice2Km + sunHorizDirKm,
       windAdvectKm * 1.10,
+      sharedWarp,
       effectiveCumulusCov,
       0.65
     );
@@ -804,8 +840,11 @@ const FRAGMENT_SHADER_SOURCE = `
     float coastalSeaMask = smoothstep(-8.0, -24.0, groundKm.x);
     float fogSpatialMask = clamp(max(riverCorridorMask * 0.9, coastalSeaMask * 0.85) + 0.35, 0.0, 1.0);
 
-    float fogNoise = fbm5(groundKm * 0.42 + windAdvectKm * 0.45 + vec2(4.2, 7.8));
-    float fogAlpha = fogDensity * fogSpatialMask * (0.45 + 0.55 * fogNoise) * smoothstep(17.5, 11.2, u_zoom) * 0.52;
+    float fogAlpha = 0.0;
+    if (fogDensity > 0.01) {
+      float fogNoise = fbm4(groundKm * 0.42 + windAdvectKm * 0.45 + vec2(4.2, 7.8));
+      fogAlpha = fogDensity * fogSpatialMask * (0.45 + 0.55 * fogNoise) * smoothstep(17.5, 11.2, u_zoom) * 0.52;
+    }
     vec3 fogColor = mix(vec3(0.80, 0.86, 0.91), vec3(0.95, 0.82, 0.68), goldenHourFactor * 0.55);
     fogColor = mix(fogColor, vec3(0.22, 0.28, 0.38), nightFactor * 0.7);
 
@@ -875,6 +914,38 @@ const FRAGMENT_SHADER_SOURCE = `
   }
 `;
 
+// ---------------------------------------------------------------------------
+// Performance budget
+// ---------------------------------------------------------------------------
+// Clouds are soft, low-frequency phenomena, so the expensive volumetric shader is
+// rendered into a reduced-resolution offscreen target and bilinearly upscaled onto the
+// map. On a retina 2880x1800 canvas this cuts shaded pixels by 10x-20x.
+const CLOUD_RENDER_MAX_SCALE = 0.5;           // never more than half the drawing-buffer res
+const CLOUD_RENDER_MAX_LONG_SIDE = 920;       // crisp resolution when camera is stationary
+const CLOUD_RENDER_MOVING_LONG_SIDE = 640;    // fast resolution during active pan/zoom/pitch
+// When the camera is idle, cloud drift updates at ~22fps (wind advection is slow), which
+// cuts idle GPU load by ~65% while keeping cloud motion & lightning completely fluid.
+const IDLE_FRAME_INTERVAL_MS = 45;
+
+const COMPOSITE_VERTEX_SOURCE = `
+  precision mediump float;
+  attribute vec2 a_pos;
+  varying vec2 v_uv;
+  void main() {
+    v_uv = a_pos * 0.5 + 0.5;
+    gl_Position = vec4(a_pos, 0.0, 1.0);
+  }
+`;
+
+const COMPOSITE_FRAGMENT_SOURCE = `
+  precision mediump float;
+  uniform sampler2D u_tex;
+  varying vec2 v_uv;
+  void main() {
+    gl_FragColor = texture2D(u_tex, v_uv);
+  }
+`;
+
 function compileShader(gl, type, source) {
   const s = gl.createShader(type);
   gl.shaderSource(s, source);
@@ -906,6 +977,17 @@ export class VolumetricWeatherLayer {
     this.nodeMetersFlat = new Float32Array(24);
     this.startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
     this.map = null;
+
+    // Offscreen reduced-resolution cloud render target + composite pass
+    this.fbo = null;
+    this.fboTexture = null;
+    this.fboWidth = 0;
+    this.fboHeight = 0;
+    this.compositeProgram = null;
+    this.compositeBuffer = null;
+    this.repaintTimer = null;
+    this.lastFboRenderMs = -1000;
+    this.lastCamKey = '';
 
     ROTTERDAM_WEATHER_NODES.forEach((n, idx) => {
       const [mx, my] = localPoint([n.lon, n.lat]);
@@ -955,6 +1037,25 @@ export class VolumetricWeatherLayer {
     for (const name of uniformNames) {
       this.uniforms[name] = gl.getUniformLocation(prog, name);
     }
+
+    // Composite (upsample) program: draws the low-res cloud buffer over the map
+    const cvs = compileShader(gl, gl.VERTEX_SHADER, COMPOSITE_VERTEX_SOURCE);
+    const cfs = compileShader(gl, gl.FRAGMENT_SHADER, COMPOSITE_FRAGMENT_SOURCE);
+    const cprog = gl.createProgram();
+    gl.attachShader(cprog, cvs);
+    gl.attachShader(cprog, cfs);
+    gl.linkProgram(cprog);
+    gl.deleteShader(cvs);
+    gl.deleteShader(cfs);
+    if (!gl.getProgramParameter(cprog, gl.LINK_STATUS)) {
+      throw new Error(`Weather Engine composite link error: ${gl.getProgramInfoLog(cprog)}`);
+    }
+    this.compositeProgram = cprog;
+    this.compositePosLoc = gl.getAttribLocation(cprog, 'a_pos');
+    this.compositeTexLoc = gl.getUniformLocation(cprog, 'u_tex');
+    this.compositeBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.compositeBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
 
     // World-space atmospheric & ground canvas spanning [-140km, +140km] around Rotterdam
     // so clouds float freely over both Rotterdam Island and the surrounding North Sea / ocean
@@ -1035,7 +1136,8 @@ export class VolumetricWeatherLayer {
   render(gl, matrix) {
     if (!this.program || !this.map || !this.stateController.isEnabled()) return;
 
-    if (this.stateController.consumeDirtyFlag()) {
+    const wasDirty = this.stateController.consumeDirtyFlag();
+    if (wasDirty) {
       this._uploadWeatherTexture(gl);
     }
 
@@ -1049,81 +1151,171 @@ export class VolumetricWeatherLayer {
     const pitchRad = (this.map.getPitch() * Math.PI) / 180;
     const bearingRad = (this.map.getBearing() * Math.PI) / 180;
 
-    // Reconstruct 3D camera position in Rotterdam local meters (+x = East, +y = South, +z = Altitude)
-    const [camTargetX, camTargetY] = localPoint([center.lng, center.lat]);
-    const approxAltMeters = Math.max(220.0, (29500000.0 / Math.pow(2.0, zoom)) * Math.cos(pitchRad));
-    const horizBackoffMeters = approxAltMeters * Math.tan(pitchRad);
-    const camX = camTargetX - Math.sin(bearingRad) * horizBackoffMeters;
-    const camY = camTargetY + Math.cos(bearingRad) * horizBackoffMeters;
-    const camZ = approxAltMeters;
-
     const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    const elapsedSec = (nowMs - this.startTime) * 0.001;
+    const isMoving = typeof this.map.isMoving === 'function' && this.map.isMoving();
+    const camKey = `${center.lng.toFixed(5)}|${center.lat.toFixed(5)}|${zoom.toFixed(3)}|${pitchRad.toFixed(3)}|${bearingRad.toFixed(3)}|${width}x${height}`;
+    const camChanged = camKey !== this.lastCamKey;
 
-    const solar = this.stateController.getActiveSolar();
-    const azRad = ((solar.azimuth_deg ?? 195) * Math.PI) / 180;
-    const elDeg = solar.elevation_deg ?? 32;
-    const elRad = (elDeg * Math.PI) / 180;
-    const sunDir = [
-      Math.cos(elRad) * Math.sin(azRad),
-      Math.cos(elRad) * Math.cos(azRad),
-      Math.sin(elRad)
-    ];
+    const targetLongSide = isMoving ? CLOUD_RENDER_MOVING_LONG_SIDE : CLOUD_RENDER_MAX_LONG_SIDE;
+    const scale = Math.min(CLOUD_RENDER_MAX_SCALE, targetLongSide / Math.max(width, height));
+    const fboW = Math.max(64, Math.round(width * scale));
+    const fboH = Math.max(64, Math.round(height * scale));
+    const sizeChanged = fboW !== this.fboWidth || fboH !== this.fboHeight;
 
-    // Calculate physical ground shadow offset in meters for cloud base at H = 1250m
-    // In localMeters: +x = East (sin(az)), +y = South (-cos(az))
-    const clampedElRad = Math.max((10.0 * Math.PI) / 180.0, Math.min((82.0 * Math.PI) / 180.0, Math.abs(elRad)));
-    const cotEl = Math.min(2.6, 1.0 / Math.tan(clampedElRad));
-    const shadowHeightMeters = 1250.0;
-    const shadowOffsetX = shadowHeightMeters * cotEl * Math.sin(azRad);
-    const shadowOffsetY = -shadowHeightMeters * cotEl * Math.cos(azRad);
+    // Preserve whatever framebuffer/viewport MapLibre expects us to draw into
+    const prevFramebuffer = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+    const prevViewport = gl.getParameter(gl.VIEWPORT);
 
-    gl.useProgram(this.program);
-    gl.disable(gl.DEPTH_TEST);
-    gl.disable(gl.CULL_FACE);
+    const shouldBakeFbo =
+      !this.fbo ||
+      wasDirty ||
+      camChanged ||
+      sizeChanged ||
+      nowMs - this.lastFboRenderMs >= IDLE_FRAME_INTERVAL_MS - 4;
+
+    if (shouldBakeFbo) {
+      this._ensureRenderTarget(gl, fboW, fboH);
+      this.lastCamKey = camKey;
+      this.lastFboRenderMs = nowMs;
+
+      // Reconstruct 3D camera position in Rotterdam local meters (+x = East, +y = South, +z = Altitude)
+      const [camTargetX, camTargetY] = localPoint([center.lng, center.lat]);
+      const approxAltMeters = Math.max(220.0, (29500000.0 / Math.pow(2.0, zoom)) * Math.cos(pitchRad));
+      const horizBackoffMeters = approxAltMeters * Math.tan(pitchRad);
+      const camX = camTargetX - Math.sin(bearingRad) * horizBackoffMeters;
+      const camY = camTargetY + Math.cos(bearingRad) * horizBackoffMeters;
+      const camZ = approxAltMeters;
+
+      const elapsedSec = (nowMs - this.startTime) * 0.001;
+
+      const solar = this.stateController.getActiveSolar();
+      const azRad = ((solar.azimuth_deg ?? 195) * Math.PI) / 180;
+      const elDeg = solar.elevation_deg ?? 32;
+      const elRad = (elDeg * Math.PI) / 180;
+      const sunDir = [
+        Math.cos(elRad) * Math.sin(azRad),
+        Math.cos(elRad) * Math.cos(azRad),
+        Math.sin(elRad)
+      ];
+
+      // Calculate physical ground shadow offset in meters for cloud base at H = 1250m
+      const clampedElRad = Math.max((10.0 * Math.PI) / 180.0, Math.min((82.0 * Math.PI) / 180.0, Math.abs(elRad)));
+      const cotEl = Math.min(2.6, 1.0 / Math.tan(clampedElRad));
+      const shadowHeightMeters = 1250.0;
+      const shadowOffsetX = shadowHeightMeters * cotEl * Math.sin(azRad);
+      const shadowOffsetY = -shadowHeightMeters * cotEl * Math.cos(azRad);
+
+      // --- Pass 1: render volumetric clouds into reduced-resolution offscreen buffer ---
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
+      gl.viewport(0, 0, fboW, fboH);
+      gl.disable(gl.SCISSOR_TEST);
+      gl.disable(gl.STENCIL_TEST);
+      gl.disable(gl.DEPTH_TEST);
+      gl.disable(gl.CULL_FACE);
+      gl.disable(gl.BLEND);
+      gl.colorMask(true, true, true, true);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+
+      gl.useProgram(this.program);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
+      gl.enableVertexAttribArray(this.aPosLoc);
+      gl.vertexAttribPointer(this.aPosLoc, 2, gl.FLOAT, false, 0, 0);
+
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.distanceTexture);
+      gl.uniform1i(this.uniforms.u_distance_tex, 0);
+
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, this.weatherTexture);
+      gl.uniform1i(this.uniforms.u_weather_tex, 1);
+
+      gl.uniformMatrix4fv(this.uniforms.u_matrix, false, localMatrix(matrix));
+      gl.uniform3f(this.uniforms.u_camera_meters, camX, camY, camZ);
+      gl.uniform1f(this.uniforms.u_zoom, zoom);
+      gl.uniform1f(this.uniforms.u_pitch_rad, pitchRad);
+      gl.uniform1f(this.uniforms.u_bearing_rad, bearingRad);
+      gl.uniform1f(this.uniforms.u_aspect, aspect);
+      gl.uniform1f(this.uniforms.u_time, elapsedSec);
+
+      gl.uniform4fv(this.uniforms.u_distance_bounds, ISLAND_DISTANCE_BOUNDS);
+      gl.uniform1f(this.uniforms.u_max_distance, ISLAND_MAX_DISTANCE);
+
+      gl.uniform2fv(this.uniforms.u_node_meters, this.nodeMetersFlat);
+      gl.uniform3f(this.uniforms.u_sun_dir, sunDir[0], sunDir[1], sunDir[2]);
+      gl.uniform1f(this.uniforms.u_sun_elevation_deg, elDeg);
+      gl.uniform2f(this.uniforms.u_shadow_offset_meters, shadowOffsetX, shadowOffsetY);
+      gl.uniform1f(this.uniforms.u_lightning_seed, 1.37);
+
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+
+    // --- Pass 2: bilinear upsample composite onto the map (premultiplied alpha) ---
+    gl.bindFramebuffer(gl.FRAMEBUFFER, prevFramebuffer);
+    gl.viewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
-    gl.enableVertexAttribArray(this.aPosLoc);
-    gl.vertexAttribPointer(this.aPosLoc, 2, gl.FLOAT, false, 0, 0);
-
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.distanceTexture);
-    gl.uniform1i(this.uniforms.u_distance_tex, 0);
-
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, this.weatherTexture);
-    gl.uniform1i(this.uniforms.u_weather_tex, 1);
-
-    gl.uniformMatrix4fv(this.uniforms.u_matrix, false, localMatrix(matrix));
-    gl.uniform3f(this.uniforms.u_camera_meters, camX, camY, camZ);
-    gl.uniform1f(this.uniforms.u_zoom, zoom);
-    gl.uniform1f(this.uniforms.u_pitch_rad, pitchRad);
-    gl.uniform1f(this.uniforms.u_bearing_rad, bearingRad);
-    gl.uniform1f(this.uniforms.u_aspect, aspect);
-    gl.uniform1f(this.uniforms.u_time, elapsedSec);
-
-    gl.uniform4fv(this.uniforms.u_distance_bounds, ISLAND_DISTANCE_BOUNDS);
-    gl.uniform1f(this.uniforms.u_max_distance, ISLAND_MAX_DISTANCE);
-
-    gl.uniform2fv(this.uniforms.u_node_meters, this.nodeMetersFlat);
-    gl.uniform3f(this.uniforms.u_sun_dir, sunDir[0], sunDir[1], sunDir[2]);
-    gl.uniform1f(this.uniforms.u_sun_elevation_deg, elDeg);
-    gl.uniform2f(this.uniforms.u_shadow_offset_meters, shadowOffsetX, shadowOffsetY);
-    gl.uniform1f(this.uniforms.u_lightning_seed, 1.37);
-
+    gl.useProgram(this.compositeProgram);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.compositeBuffer);
+    gl.enableVertexAttribArray(this.compositePosLoc);
+    gl.vertexAttribPointer(this.compositePosLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.fboTexture);
+    gl.uniform1i(this.compositeTexLoc, 2);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.activeTexture(gl.TEXTURE0);
 
-    // Maintain smooth 60FPS continuous wind advection & storm animation
-    this.map.triggerRepaint();
+    // Throttled continuous animation: ~22fps cloud drift while idle. During camera
+    // interaction MapLibre renders every display frame on its own, so pan/zoom stays smooth.
+    if (!isMoving) {
+      this._scheduleIdleFrame();
+    }
+  }
+
+  _ensureRenderTarget(gl, w, h) {
+    if (this.fbo && this.fboWidth === w && this.fboHeight === h) return;
+    if (!this.fboTexture) this.fboTexture = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.fboTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    if (!this.fbo) this.fbo = gl.createFramebuffer();
+    const prev = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.fboTexture, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, prev);
+    gl.activeTexture(gl.TEXTURE0);
+    this.fboWidth = w;
+    this.fboHeight = h;
+  }
+
+  _scheduleIdleFrame() {
+    if (this.repaintTimer) return;
+    this.repaintTimer = setTimeout(() => {
+      this.repaintTimer = null;
+      if (this.map && this.stateController.isEnabled()) this.map.triggerRepaint();
+    }, IDLE_FRAME_INTERVAL_MS);
   }
 
   onRemove(map, gl) {
+    if (this.repaintTimer) {
+      clearTimeout(this.repaintTimer);
+      this.repaintTimer = null;
+    }
     if (this.quadBuffer && gl.isBuffer(this.quadBuffer)) gl.deleteBuffer(this.quadBuffer);
+    if (this.compositeBuffer && gl.isBuffer(this.compositeBuffer)) gl.deleteBuffer(this.compositeBuffer);
     if (this.distanceTexture && gl.isTexture(this.distanceTexture)) gl.deleteTexture(this.distanceTexture);
     if (this.weatherTexture && gl.isTexture(this.weatherTexture)) gl.deleteTexture(this.weatherTexture);
+    if (this.fboTexture && gl.isTexture(this.fboTexture)) gl.deleteTexture(this.fboTexture);
+    if (this.fbo && gl.isFramebuffer(this.fbo)) gl.deleteFramebuffer(this.fbo);
     if (this.program && gl.isProgram(this.program)) gl.deleteProgram(this.program);
+    if (this.compositeProgram && gl.isProgram(this.compositeProgram)) gl.deleteProgram(this.compositeProgram);
+    this.map = null;
   }
 }
 
@@ -1288,19 +1480,38 @@ export function createWeatherEngineController(map, onStateChange = null) {
     }
   }
 
+  // HUD only cares about the altitude phase/canopy opacity during zoom — coalesce to one
+  // check per animation frame and skip Svelte updates when nothing visible changed.
+  let zoomRafPending = false;
+  let lastAltitudeKey = '';
+  function onZoomThrottled() {
+    if (zoomRafPending) return;
+    zoomRafPending = true;
+    requestAnimationFrame(() => {
+      zoomRafPending = false;
+      if (removed || !map) return;
+      const alt = computeAltitudeCloudFade(map.getZoom());
+      const key = `${alt.phaseLabel}|${Math.round(alt.canopyOpacity * 20)}`;
+      if (key !== lastAltitudeKey) {
+        lastAltitudeKey = key;
+        notify();
+      }
+    });
+  }
+
   if (map) {
     if (map.isStyleLoaded()) {
       attachLayer();
     }
     map.on('load', attachLayer);
     map.on('styledata', attachLayer);
-    map.on('zoom', notify);
+    map.on('zoom', onZoomThrottled);
     map.once('remove', () => {
       removed = true;
       if (pollInterval) clearInterval(pollInterval);
       map.off('load', attachLayer);
       map.off('styledata', attachLayer);
-      map.off('zoom', notify);
+      map.off('zoom', onZoomThrottled);
     });
   }
 

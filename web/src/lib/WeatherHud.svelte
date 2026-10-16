@@ -202,9 +202,7 @@
     align-items: center;
     gap: 10px;
     padding: 7px 12px;
-    background: rgba(11, 15, 23, 0.88);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
+    background: rgba(11, 15, 23, 0.92);
     border: 1px solid rgba(148, 163, 184, 0.18);
     border-radius: 999px;
     color: #f1f5f9;
@@ -311,9 +309,7 @@
 
   .inspector-drawer {
     width: 320px;
-    background: rgba(9, 13, 22, 0.94);
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
+    background: rgba(9, 13, 22, 0.96);
     border: 1px solid rgba(148, 163, 184, 0.2);
     border-radius: 14px;
     padding: 14px;

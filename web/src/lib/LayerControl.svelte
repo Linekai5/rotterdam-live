@@ -224,7 +224,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    background: rgba(255, 255, 255, 0.95);
+    background: rgba(255, 255, 255, 0.97);
     color: #1f2937;
     border: 1px solid rgba(0, 0, 0, 0.08);
     padding: 10px 14px;
@@ -233,7 +233,6 @@
     cursor: pointer;
     font-size: 14px;
     font-weight: 600;
-    backdrop-filter: blur(8px);
     transition: all 0.2s ease;
   }
 
@@ -248,8 +247,7 @@
     bottom: 50px;
     left: 0;
     width: 270px;
-    background: rgba(255, 255, 255, 0.96);
-    backdrop-filter: blur(16px);
+    background: rgba(255, 255, 255, 0.98);
     border: 1px solid rgba(0, 0, 0, 0.08);
     border-radius: 16px;
     padding: 16px;
