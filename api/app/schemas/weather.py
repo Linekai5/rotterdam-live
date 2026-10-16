@@ -88,9 +88,136 @@ class WeatherRadarResponse(BaseModel):
     latest_frame: Optional[RadarFrame] = Field(None, description="Most recent radar frame")
 
 
+class SolarPosition(BaseModel):
+    """Real-time astronomical solar position for Rotterdam (51.922°N, 4.479°E)."""
+    latitude: float = Field(51.922, description="Reference latitude in degrees")
+    longitude: float = Field(4.479, description="Reference longitude in degrees")
+    azimuth_deg: float = Field(..., description="Solar azimuth angle in degrees (0=N, 90=E, 180=S, 270=W)")
+    elevation_deg: float = Field(..., description="Solar elevation angle above horizon in degrees (-90 to +90)")
+    zenith_deg: float = Field(..., description="Solar zenith angle in degrees")
+    is_day: int = Field(..., description="1 if sun is above horizon, 0 at night")
+    daylight_phase: str = Field(..., description="Current lighting phase: night | twilight | golden_hour | day")
+    sun_vector: List[float] = Field(..., description="Normalized 3D light direction vector [x_east, y_north, z_up]")
+    shadow_offset_factor: List[float] = Field(
+        ...,
+        description="Projected ground cloud shadow offset multiplier [dx, dy] = cot(elev) * (sin(az), cos(az))",
+    )
+
+
+class SpatialWeatherNodeProperties(BaseModel):
+    """Meteorological telemetry for one node of the 12-point Rotterdam Island micro-grid."""
+    node_id: int = Field(..., description="1-based node index (1..12)")
+    node_index: int = Field(..., description="0-based shader array index (0..11)")
+    id: str = Field(..., description="Unique grid node slug identifier")
+    name: str = Field(..., description="Grid node neighborhood/sector name")
+    district: str = Field(..., description="Rotterdam municipal district or sector")
+    zone: str = Field(..., description="Micro-climate zone: coastal | harbor | river | urban | inland")
+    lat: float = Field(..., description="Node latitude (WGS84)")
+    lon: float = Field(..., description="Node longitude (WGS84)")
+    timestamp: str = Field(..., description="Observation/model ISO 8601 timestamp")
+    cloud_cover: float = Field(..., description="Total cloud cover (%)")
+    cloud_cover_low: float = Field(..., description="Low-altitude cloud deck 0-2km (%)")
+    cloud_cover_mid: float = Field(..., description="Mid-altitude cloud deck 2-6km (%)")
+    cloud_cover_high: float = Field(..., description="High-altitude cirrus deck >6km (%)")
+    precipitation: float = Field(..., description="Total precipitation rate (mm/h)")
+    rain: float = Field(..., description="Stratiform rain rate (mm/h)")
+    showers: float = Field(..., description="Convective shower rate (mm/h)")
+    snowfall: float = Field(..., description="Snowfall rate (cm/h)")
+    weather_code: int = Field(..., description="WMO meteorological weather code")
+    weather_description: str = Field(..., description="Human-readable Dutch weather description")
+    wind_speed_10m: float = Field(..., description="10m wind speed (km/h)")
+    wind_speed_ms: float = Field(..., description="10m wind speed (m/s)")
+    wind_direction_10m: int = Field(..., description="10m wind direction in degrees (0-360)")
+    wind_gusts_10m: float = Field(..., description="10m wind gusts (km/h)")
+    wind_gusts_ms: float = Field(..., description="10m wind gusts (m/s)")
+    wind_u: float = Field(..., description="Eastward wind vector component u (m/s)")
+    wind_v: float = Field(..., description="Northward wind vector component v (m/s)")
+    temperature_2m: float = Field(..., description="2m air temperature (°C)")
+    apparent_temperature: float = Field(..., description="Apparent / feels-like temperature (°C)")
+    relative_humidity_2m: float = Field(..., description="2m relative humidity (%)")
+    visibility: float = Field(..., description="Horizontal visibility (meters)")
+    surface_pressure: float = Field(..., description="Surface barometric pressure (hPa)")
+    cape: float = Field(..., description="Convective Available Potential Energy (J/kg)")
+    is_day: int = Field(..., description="Daylight flag (1=day, 0=night)")
+    storm_intensity: float = Field(..., description="Normalized WebGL shader storm intensity [0.0..1.0]")
+    fog_density: float = Field(..., description="Normalized WebGL shader coastal/river fog density [0.0..1.0]")
+    lightning_active: bool = Field(False, description="True if thunderstorm / sheet lightning is active in cell")
+
+
+class SpatialWeatherNodeFeature(BaseModel):
+    """RFC 7946 GeoJSON Feature for a spatial weather grid node."""
+    type: Literal["Feature"] = "Feature"
+    id: str = Field(..., description="Feature identifier (e.g. weather-grid-node-1)")
+    geometry: Dict[str, Any] = Field(..., description="GeoJSON Point geometry [lon, lat]")
+    properties: SpatialWeatherNodeProperties
+
+
+class SpatialWindField(BaseModel):
+    """City-wide aggregated wind vector field and coastal-to-inland shear metrics."""
+    mean_speed_kmh: float = Field(..., description="Mean 10m wind speed across Rotterdam (km/h)")
+    mean_speed_ms: float = Field(..., description="Mean 10m wind speed across Rotterdam (m/s)")
+    max_gusts_kmh: float = Field(..., description="Maximum wind gusts across the 12-node grid (km/h)")
+    mean_direction_deg: int = Field(..., description="Vector-averaged wind direction (degrees)")
+    direction_compass: str = Field(..., description="Compass cardinal direction (e.g. ZW, WNW)")
+    mean_u_ms: float = Field(..., description="Mean eastward wind component u (m/s)")
+    mean_v_ms: float = Field(..., description="Mean northward wind component v (m/s)")
+    coastal_speed_kmh: float = Field(..., description="Mean wind speed at coastal Maasvlakte/Hoek van Holland (km/h)")
+    inland_speed_kmh: float = Field(..., description="Mean wind speed at inland districts (km/h)")
+    coastal_inland_gradient_kmh: float = Field(..., description="Wind speed delta between North Sea coast and inland (km/h)")
+
+
+class StormFlags(BaseModel):
+    """Active atmospheric hazard flags for WebGL storm rendering & tactical HUD."""
+    is_storm: bool = Field(..., description="True if heavy precipitation (>=4mm/h), high gusts, or WMO storm code")
+    is_thunderstorm: bool = Field(..., description="True if WMO thunderstorm (95, 96, 99) or high CAPE")
+    lightning_probability: float = Field(..., description="Probability [0.0..1.0] of in-cloud sheet lightning")
+    coastal_squall: bool = Field(..., description="True if coastal nodes experience squall conditions")
+    fog_advisory: bool = Field(..., description="True if visibility < 3000m or relative humidity > 92%")
+    active_rain_nodes: int = Field(..., description="Number of grid nodes (out of 12) currently experiencing precipitation")
+    max_cape_j_kg: float = Field(..., description="Peak CAPE across the 12-node mesh (J/kg)")
+    max_precipitation_mm_h: float = Field(..., description="Peak precipitation rate across the 12-node mesh (mm/h)")
+    max_wind_gusts_kmh: float = Field(..., description="Peak wind gusts across the 12-node mesh (km/h)")
+
+
+class SpatialWeatherCitySummary(BaseModel):
+    """Aggregated city-wide summary metrics across all 12 Rotterdam Island grid nodes."""
+    temperature_avg_c: float = Field(..., description="Mean temperature across Rotterdam (°C)")
+    temperature_min_c: float = Field(..., description="Minimum node temperature (°C)")
+    temperature_max_c: float = Field(..., description="Maximum node temperature (°C)")
+    cloud_cover_avg_pct: float = Field(..., description="Mean total cloud cover (%)")
+    cloud_cover_low_avg_pct: float = Field(..., description="Mean low-deck cloud cover (%)")
+    cloud_cover_mid_avg_pct: float = Field(..., description="Mean mid-deck cloud cover (%)")
+    cloud_cover_high_avg_pct: float = Field(..., description="Mean high-deck cloud cover (%)")
+    precipitation_avg_mm_h: float = Field(..., description="Mean precipitation rate (mm/h)")
+    precipitation_max_mm_h: float = Field(..., description="Max precipitation rate (mm/h)")
+    humidity_avg_pct: float = Field(..., description="Mean relative humidity (%)")
+    visibility_min_m: float = Field(..., description="Minimum visibility across nodes (meters)")
+    surface_pressure_avg_hpa: float = Field(..., description="Mean barometric pressure (hPa)")
+    dominant_weather_code: int = Field(..., description="Most severe / dominant WMO weather code")
+    dominant_weather_description: str = Field(..., description="Dutch description of dominant condition")
+
+
+class SpatialWeatherGridResponse(BaseModel):
+    """RFC 7946 GeoJSON FeatureCollection for the 12-point Rotterdam Spatial Weather Grid."""
+    type: Literal["FeatureCollection"] = "FeatureCollection"
+    generated_at: str = Field(..., description="ISO 8601 UTC generation timestamp")
+    ttl_seconds: int = Field(120, description="Redis cache TTL in seconds")
+    model: str = Field("knmi_harmonie_arome", description="Upstream numerical weather model")
+    total_nodes: int = Field(12, description="Number of spatial grid nodes covering Rotterdam Island")
+    features: List[SpatialWeatherNodeFeature] = Field(..., description="12 GeoJSON Point features for the weather mesh")
+    grid_nodes: List[SpatialWeatherNodeProperties] = Field(..., description="Flat array of all 12 node telemetry payloads")
+    city_summary: SpatialWeatherCitySummary = Field(..., description="Aggregated city-wide weather summary")
+    wind_field: SpatialWindField = Field(..., description="City-wide wind vector field and coastal gradient")
+    solar: SolarPosition = Field(..., description="Live Rotterdam solar azimuth, elevation, and shadow vectors")
+    storm_flags: StormFlags = Field(..., description="Active storm, lightning, squall, and fog flags")
+
+
 class LiveWeatherOverview(BaseModel):
-    """Instant unified overview of Rotterdam live weather."""
+    """Instant unified overview + 12-point GeoJSON Spatial Weather Grid of Rotterdam."""
+    type: Literal["FeatureCollection"] = "FeatureCollection"
     generated_at: str = Field(..., description="ISO 8601 UTC timestamp")
+    ttl_seconds: int = Field(120, description="Redis cache TTL in seconds")
+    model: str = Field("knmi_harmonie_arome", description="Upstream NWP model identifier")
     location: str = Field("Rotterdam", description="Primary city location")
     station_name: str = Field(..., description="Primary observation station name")
     station_id: int = Field(..., description="Primary observation station ID")
@@ -106,3 +233,11 @@ class LiveWeatherOverview(BaseModel):
     summary: str = Field(..., description="Concise human-readable live summary in Dutch")
     stations: List[Dict[str, Any]] = Field(..., description="Key metrics for all Rotterdam regional stations")
     radar_latest_tile_url: Optional[str] = Field(None, description="MapLibre tile URL for latest rain radar frame")
+    total_nodes: int = Field(12, description="Total nodes in the 12-point Rotterdam spatial weather mesh")
+    features: List[SpatialWeatherNodeFeature] = Field(default_factory=list, description="12 GeoJSON Point features for the weather mesh")
+    grid_nodes: List[SpatialWeatherNodeProperties] = Field(default_factory=list, description="12 spatial weather grid node payloads")
+    city_summary: Optional[SpatialWeatherCitySummary] = Field(None, description="City-wide aggregated weather metrics")
+    wind_field: Optional[SpatialWindField] = Field(None, description="Wind vector field and coastal gradient")
+    solar: Optional[SolarPosition] = Field(None, description="Real-time Rotterdam solar azimuth and elevation")
+    storm_flags: Optional[StormFlags] = Field(None, description="Storm, lightning, and coastal fog flags")
+

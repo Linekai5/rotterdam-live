@@ -235,6 +235,16 @@ class IngestionScheduler:
             replace_existing=True,
         )
 
+        # 15b. 12-Point Rotterdam Spatial Weather Micro-Grid (every 120 seconds)
+        self.scheduler.add_job(
+            self._safe_run,
+            "interval",
+            seconds=120,
+            args=["weather_spatial_grid", self.weather_harvester.fetch_spatial_weather_grid],
+            id="job_weather_spatial_grid",
+            replace_existing=True,
+        )
+
         # 16. Database Cleanup
         self.scheduler.add_job(
             self.cleanup_expired_events,

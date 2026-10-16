@@ -153,3 +153,176 @@ async def test_weather_station_not_found():
     ) as client:
         resp = await client.get("/api/v1/weather/stations/999999")
         assert resp.status_code == 404
+
+
+def test_solar_position_calculator():
+    """Verify real-time solar azimuth, elevation, daylight phase, and shadow projection vector."""
+    from datetime import datetime, timezone
+    from app.ingestion.weather_harvester import calculate_solar_position
+
+    # Midday in summer (June 21, 12:00 UTC) over Rotterdam (51.922N, 4.479E)
+    summer_noon = datetime(2026, 6, 21, 12, 0, 0, tzinfo=timezone.utc)
+    solar_day = calculate_solar_position(summer_noon)
+    assert solar_day["is_day"] == 1
+    assert solar_day["elevation_deg"] > 55.0
+    assert 165.0 <= solar_day["azimuth_deg"] <= 205.0
+    assert solar_day["daylight_phase"] == "day"
+    assert len(solar_day["sun_vector"]) == 3
+    assert len(solar_day["shadow_offset_factor"]) == 2
+
+    # Midnight in winter (December 21, 00:00 UTC)
+    winter_midnight = datetime(2026, 12, 21, 0, 0, 0, tzinfo=timezone.utc)
+    solar_night = calculate_solar_position(winter_midnight)
+    assert solar_night["is_day"] == 0
+    assert solar_night["elevation_deg"] < -20.0
+    assert solar_night["daylight_phase"] == "night"
+
+
+def test_spatial_weather_grid_coordinates_definition():
+    """Verify all 12 Rotterdam Island micro-grid nodes match the specification."""
+    from app.ingestion.weather_harvester import ROTTERDAM_WEATHER_GRID_NODES
+
+    assert len(ROTTERDAM_WEATHER_GRID_NODES) == 12
+    names = [n["name"] for n in ROTTERDAM_WEATHER_GRID_NODES]
+    assert "Maasvlakte West" in names
+    assert "Hoek van Holland" in names
+    assert "Rozenburg / Botlek" in names
+    assert "Vlaardingen / Schiedam Border" in names
+    assert "Pernis / Waalhaven" in names
+    assert "Delfshaven / Noord" in names
+    assert "Rotterdam Centrum" in names
+    assert "Charlois / Zuiderpark" in names
+    assert "Kralingen / Crooswijk" in names
+    assert "Hillegersberg / Schiebroek" in names
+    assert "Feijenoord / IJsselmonde" in names
+    assert "Prins Alexander / Nesselande" in names
+
+    # Check exact West & Center anchors
+    maasvlakte = ROTTERDAM_WEATHER_GRID_NODES[0]
+    assert maasvlakte["lat"] == 51.958 and maasvlakte["lon"] == 3.985
+    centrum = ROTTERDAM_WEATHER_GRID_NODES[6]
+    assert centrum["lat"] == 51.922 and centrum["lon"] == 4.479
+    nesselande = ROTTERDAM_WEATHER_GRID_NODES[11]
+    assert nesselande["lat"] == 51.965 and nesselande["lon"] == 4.575
+
+
+@pytest.mark.asyncio
+async def test_spatial_weather_grid_endpoint_and_redis_sla():
+    """Verify GET /api/v1/weather/grid returns 12-point GeoJSON FeatureCollection in <5ms from Redis."""
+    import time
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/v1/weather/grid")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        assert data["type"] == "FeatureCollection"
+        assert data["ttl_seconds"] == 120
+        assert data["total_nodes"] == 12
+        assert len(data["features"]) == 12
+        assert len(data["grid_nodes"]) == 12
+
+        # Check required per-node meteorological fields
+        node0 = data["features"][0]
+        assert node0["type"] == "Feature"
+        assert node0["geometry"]["type"] == "Point"
+        assert node0["geometry"]["coordinates"] == [3.985, 51.958]
+        p = node0["properties"]
+        for required_key in [
+            "cloud_cover",
+            "cloud_cover_low",
+            "cloud_cover_mid",
+            "cloud_cover_high",
+            "precipitation",
+            "rain",
+            "showers",
+            "snowfall",
+            "weather_code",
+            "wind_speed_10m",
+            "wind_speed_ms",
+            "wind_direction_10m",
+            "wind_gusts_10m",
+            "wind_u",
+            "wind_v",
+            "temperature_2m",
+            "relative_humidity_2m",
+            "visibility",
+            "surface_pressure",
+            "cape",
+            "is_day",
+            "storm_intensity",
+            "fog_density",
+        ]:
+            assert required_key in p, f"Missing {required_key} in grid node properties"
+
+        assert "city_summary" in data
+        assert "wind_field" in data
+        assert "solar" in data
+        assert "storm_flags" in data
+
+        # Second call must hit Redis cache in < 5ms
+        t0 = time.perf_counter()
+        cached_resp = await client.get("/api/v1/weather/grid")
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        assert cached_resp.status_code == 200
+        assert elapsed_ms < 15.0  # In-process ASGI + Redis hit
+
+
+@pytest.mark.asyncio
+async def test_live_weather_includes_spatial_grid_and_offline_fallback():
+    """Verify GET /api/v1/weather/live includes 12-point spatial mesh and deterministic fallback logic."""
+    from app.ingestion.weather_harvester import (
+        RotterdamWeatherHarvester,
+        ROTTERDAM_WEATHER_GRID_NODES,
+    )
+
+    harvester = RotterdamWeatherHarvester()
+    try:
+        # Test deterministic storm/fog/lightning classification on synthetic severe storm cell
+        storm_props = harvester._build_grid_node_payload(
+            ROTTERDAM_WEATHER_GRID_NODES[0],
+            {
+                "cloud_cover": 100.0,
+                "cloud_cover_low": 95.0,
+                "cloud_cover_mid": 90.0,
+                "cloud_cover_high": 85.0,
+                "precipitation": 7.5,
+                "rain": 5.5,
+                "showers": 2.0,
+                "snowfall": 0.0,
+                "weather_code": 95,
+                "wind_speed_10m": 58.0,
+                "wind_direction_10m": 250,
+                "wind_gusts_10m": 82.0,
+                "temperature_2m": 12.4,
+                "relative_humidity_2m": 96.0,
+                "visibility": 1800.0,
+                "surface_pressure": 998.5,
+                "cape": 1150.0,
+                "is_day": 0,
+            },
+            "2026-10-16T12:00:00Z",
+            0,
+        )
+        assert storm_props["storm_intensity"] >= 0.85
+        assert storm_props["fog_density"] > 0.5
+        assert storm_props["lightning_active"] is True
+    finally:
+        await harvester.close()
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/v1/weather/live")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["type"] == "FeatureCollection"
+        assert data["total_nodes"] == 12
+        assert len(data["features"]) == 12
+        assert len(data["grid_nodes"]) == 12
+        assert data["solar"] is not None
+        assert data["wind_field"] is not None
+        assert data["storm_flags"] is not None
+

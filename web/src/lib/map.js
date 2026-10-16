@@ -6,8 +6,34 @@ import styleDark from './style_dark.json';
 import { installCoastalOcean, removeCoastalOcean, OCEAN_LAYER } from './coastalOcean.js';
 import { installLiveEvents, filterLiveEvents } from './liveLayers.js';
 import { installTrafficMapLayer, setTrafficVisibility } from './trafficClient.js';
+import {
+  ROTTERDAM_ISLAND_ENVELOPE,
+  ROTTERDAM_OUTER_SAFETY_BOUNDS,
+  ROTTERDAM_ISLAND_POLYGON,
+  MAX_ZOOM_LIMIT,
+  calculateResponsiveMinZoom,
+  clampToRotterdamIsland,
+  isPointInRotterdamIsland,
+  cubicOutEasing,
+  installElasticIslandPhysics
+} from './cameraPhysics.js';
+import { WEATHER_LAYER_ID } from './weatherEngine.js';
 
-export { installLiveEvents, filterLiveEvents, installTrafficMapLayer, setTrafficVisibility };
+export {
+  installLiveEvents,
+  filterLiveEvents,
+  installTrafficMapLayer,
+  setTrafficVisibility,
+  ROTTERDAM_ISLAND_ENVELOPE,
+  ROTTERDAM_OUTER_SAFETY_BOUNDS,
+  ROTTERDAM_ISLAND_POLYGON,
+  MAX_ZOOM_LIMIT,
+  calculateResponsiveMinZoom,
+  clampToRotterdamIsland,
+  isPointInRotterdamIsland,
+  cubicOutEasing,
+  installElasticIslandPhysics
+};
 
 /**
  * Rotterdam coordinate bounding box [SW, NE]
@@ -78,24 +104,26 @@ export async function initMap(mapElement, onReady) {
   }
 
   const pageOrigin = typeof window !== 'undefined' ? window.location.origin : (typeof location !== 'undefined' ? location.origin : '');
+  const responsiveMinZoom = calculateResponsiveMinZoom(mapElement);
 
   const map = new maplibregl.Map({
     container: mapElement,
     style: config.style,
     center: [4.48, 51.92],
-    zoom: initialZoom || 12,
-    minZoom: 8,
-    maxZoom: 20,
-    interactive: false,
-    dragPan: false,
-    scrollZoom: false,
-    boxZoom: false,
-    dragRotate: false,
-    keyboard: false,
-    doubleClickZoom: false,
-    touchZoomRotate: false,
-    touchPitch: false,
-    pitchWithRotate: false,
+    zoom: initialZoom ? Math.max(responsiveMinZoom, Math.min(MAX_ZOOM_LIMIT, initialZoom)) : 11.6,
+    minZoom: responsiveMinZoom,
+    maxZoom: MAX_ZOOM_LIMIT,
+    maxBounds: ROTTERDAM_OUTER_SAFETY_BOUNDS,
+    interactive: true,
+    dragPan: true,
+    scrollZoom: true,
+    boxZoom: true,
+    dragRotate: true,
+    keyboard: true,
+    doubleClickZoom: true,
+    touchZoomRotate: true,
+    touchPitch: true,
+    pitchWithRotate: true,
     maxPitch: 65,
     antialias: true,
     renderWorldCopies: false,
@@ -128,6 +156,7 @@ export async function initMap(mapElement, onReady) {
   if (typeof window !== 'undefined') window.map = map;
 
   installCoastalOcean(map);
+  installElasticIslandPhysics(map);
 
   map.on('load', () => {
     try { map.resize(); } catch (e) {}
@@ -137,9 +166,6 @@ export async function initMap(mapElement, onReady) {
         map.fitBounds(ROTTERDAM_BOUNDS, { padding: 40, animate: false });
       }
     }
-    // Keep API connection active in frontend, but do not render live clutter on the map
-    // installLiveEvents(map);
-    // installTrafficMapLayer(map);
     if (onReady) onReady(map);
   });
 
@@ -158,6 +184,9 @@ export function switchStyle(map, mode, state = {}) {
 
   // Use diff: true to prevent reload flicker and preserve camera position
   removeCoastalOcean(map);
+  if (map.getLayer(WEATHER_LAYER_ID)) {
+    map.removeLayer(WEATHER_LAYER_ID);
+  }
   map.setStyle(config.style, { diff: true });
 
   const container = map.getContainer();
@@ -173,8 +202,6 @@ export function switchStyle(map, mode, state = {}) {
     if (state.buildings3d) {
       toggle3DBuildings(map, true);
     }
-    // installLiveEvents(map);
-    // installTrafficMapLayer(map);
   });
 }
 

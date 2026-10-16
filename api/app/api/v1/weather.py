@@ -8,6 +8,7 @@ from app.cache.redis_client import get_cached_json, set_cached_json
 from app.schemas.weather import (
     LiveWeatherOverview,
     RainForecastResponse,
+    SpatialWeatherGridResponse,
     WeatherStationsFeatureCollection,
     WeatherStationFeature,
     WeatherRadarResponse,
@@ -26,35 +27,54 @@ _harvester = RotterdamWeatherHarvester()
 @router.get(
     "/live",
     response_model=LiveWeatherOverview,
-    summary="Instant overview of Rotterdam live weather and precipitation",
+    summary="Unified Rotterdam live weather overview & 12-point spatial weather grid GeoJSON",
 )
 async def get_live_weather() -> LiveWeatherOverview:
     """
-    Get a unified, instant overview of current Rotterdam weather:
-    - Temperature, feels-like, condition icon and description.
-    - Wind speed (Bft and km/h), direction, gusts.
-    - Rain nowcast status (currently raining, next expected rain in X minutes).
-    - Natural language summary in Dutch.
-    Served in < 5ms directly from Redis cache.
+    Get a unified, instant overview + 12-point spatial weather mesh of Rotterdam:
+    - GeoJSON FeatureCollection of all 12 micro-grid nodes spanning Rotterdam Island.
+    - City-wide summary metrics, wind vector field, live solar azimuth/elevation, and storm flags.
+    - Temperature, feels-like, condition icon and description, rain nowcast status.
+    Served in < 5ms directly from Redis cache (120s TTL).
     """
     cache_key = "weather:live:rotterdam"
     cached = await get_cached_json(cache_key)
-    if cached:
+    if cached and cached.get("features") and len(cached.get("features", [])) == 12:
         return LiveWeatherOverview.model_validate(cached)
 
-    # Cold-start fallback: execute harvest on demand and cache
+    # Cold-start or upgraded schema fallback: execute spatial grid & station harvest on demand
+    await _harvester.fetch_spatial_weather_grid(sync_live_overview=False)
     await _harvester.fetch_weather_stations()
     overview = await get_cached_json(cache_key)
     if overview:
         return LiveWeatherOverview.model_validate(overview)
 
-    # Fallback to fresh harvest
-    res = await _harvester.fetch_weather_stations()
-    cached = await get_cached_json(cache_key)
-    if cached:
-        return LiveWeatherOverview.model_validate(cached)
-
     raise HTTPException(status_code=503, detail="Weather telemetry temporarily unavailable")
+
+
+@router.get(
+    "/grid",
+    response_model=SpatialWeatherGridResponse,
+    summary="High-resolution 12-point Rotterdam Island Spatial Weather Grid (KNMI HARMONIE AROME)",
+)
+async def get_spatial_weather_grid() -> SpatialWeatherGridResponse:
+    """
+    Returns a GeoJSON FeatureCollection and structured 12-node spatial weather mesh
+    spanning Rotterdam Island from Maasvlakte West (North Sea) to Nesselande:
+    - Cloud cover decks (low, mid, high, total %), precipitation, rain, showers, snowfall.
+    - Wind speed (km/h & m/s), direction (degrees), gusts, and (u, v) advection vectors.
+    - Temperature, relative humidity, horizontal visibility, surface pressure, and CAPE.
+    - Real-time Rotterdam solar azimuth, elevation, and ground cloud shadow projection vectors.
+    - Active storm, sheet lightning, coastal squall, and harbor fog flags.
+    Cached in Redis 7 with a 120s TTL (< 5ms response latency).
+    """
+    cache_key = "weather:spatial:grid"
+    cached = await get_cached_json(cache_key)
+    if cached and len(cached.get("features", [])) == 12:
+        return SpatialWeatherGridResponse.model_validate(cached)
+
+    grid_data = await _harvester.fetch_spatial_weather_grid()
+    return SpatialWeatherGridResponse.model_validate(grid_data)
 
 
 @router.get(
