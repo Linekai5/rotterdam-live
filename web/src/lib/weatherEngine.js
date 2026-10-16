@@ -567,12 +567,13 @@ const FRAGMENT_SHADER_SOURCE = `
   }
 
   // Shared low-frequency organic domain warp (computed ONCE per pixel and reused by
-  // every altitude slice — the warp field is smooth so per-slice recomputation is wasted).
+  // every altitude slice — includes subtle time evolution so clouds gently billow & morph).
   vec2 cloudDomainWarp(vec2 posKm, vec2 windAdvectKm) {
-    vec2 p = posKm * 0.26 + windAdvectKm;
+    vec2 p = posKm * 0.26 + windAdvectKm * 0.85;
+    vec2 drift = vec2(u_time * 0.016, -u_time * 0.012);
     return vec2(
-      fbm3(p * 0.75 + vec2(1.7, 9.2)),
-      fbm3(p * 0.75 + vec2(8.3, 2.8))
+      fbm3(p * 0.75 + drift + vec2(1.7, 9.2)),
+      fbm3(p * 0.75 - drift * 0.8 + vec2(8.3, 2.8))
     ) - 0.5;
   }
 
@@ -598,8 +599,9 @@ const FRAGMENT_SHADER_SOURCE = `
     if (rawEnvelope <= 0.001) return 0.0;
 
     // Multi-octave Worley cellular cauliflower billows carved into the cloud body & perimeter
-    float billowCoarse = worleyBillow(wPos * 2.15 + vec2(heightFrac * 0.35, -heightFrac * 0.25));
-    float billowFine = worleyBillow(wPos * 4.70 - vec2(heightFrac * 0.50, heightFrac * 0.40));
+    vec2 billowMorph = vec2(u_time * 0.022, -u_time * 0.018);
+    float billowCoarse = worleyBillow(wPos * 2.15 + billowMorph + vec2(heightFrac * 0.35, -heightFrac * 0.25));
+    float billowFine = worleyBillow(wPos * 4.70 - billowMorph * 1.3 - vec2(heightFrac * 0.50, heightFrac * 0.40));
     float cauliflower = billowCoarse * 0.64 + billowFine * 0.36;
     float sculpted = rawEnvelope * (0.58 + 0.42 * cauliflower) - (1.0 - cauliflower) * 0.22 * (1.0 - rawEnvelope);
     return clamp(smoothstep(0.08, 0.78, sculpted), 0.0, 1.0);
@@ -708,8 +710,13 @@ const FRAGMENT_SHADER_SOURCE = `
     float stormIntensity = windStormFog.b;
     float fogDensity = windStormFog.a;
 
-    // In localMeters: +x is East, +y is South (so Northward wind v > 0 moves toward -y)
-    vec2 windAdvectKm = vec2(-windMs.x, windMs.y) * (u_time * 0.014);
+    // In localMeters: +x is East, +y is South (so Northward wind v > 0 moves toward -y).
+    // Apply a perceptual baseline floor so even light 8-10 km/h breezes visibly glide across Rotterdam
+    // in real time, while strong gusts & squalls accelerate proportionally.
+    float rawSpeedMs = length(windMs);
+    vec2 windUnit = rawSpeedMs > 0.05 ? (vec2(-windMs.x, windMs.y) / rawSpeedMs) : vec2(-0.85, 0.52);
+    float perceptualSpeed = (max(3.6, rawSpeedMs) + rawSpeedMs * 0.85) * 0.024;
+    vec2 windAdvectKm = windUnit * (u_time * perceptualSpeed);
 
     // 3. Phase 4 Altitude Zoom-Fade ("Dive Through the Clouds" Mechanics)
     float baseAltitudeAlpha = smoothstep(14.2, 12.0, u_zoom);
@@ -748,7 +755,8 @@ const FRAGMENT_SHADER_SOURCE = `
     // 5. Projected 3D Ground Cloud Shadows on Rotterdam Island & Surrounding Coastal Waters
     // Trace from ground point (Z = 0m) toward the sun to the cloud base altitude (H = 1250m)
     vec2 shadowSampleKm = (groundMeters + u_shadow_offset_meters) * 0.001;
-    float shadowCloud = evaluateCloudEnvelopeFast(shadowSampleKm, windAdvectKm * 1.03, sharedWarp, effectiveCumulusCov, 0.32);
+    vec2 shadowWarp = cloudDomainWarp(shadowSampleKm, windAdvectKm);
+    float shadowCloud = evaluateCloudEnvelopeFast(shadowSampleKm, windAdvectKm * 1.04, shadowWarp, effectiveCumulusCov, 0.32);
     float daylightShadowFactor = smoothstep(-2.0, 10.0, u_sun_elevation_deg);
     float zoomShadowMod = 0.28 + 0.72 * smoothstep(16.5, 11.6, u_zoom);
     // Cast crisp 3D shadows on Rotterdam Island land and slightly softer shadows on the ocean water
@@ -925,7 +933,7 @@ const CLOUD_RENDER_MAX_LONG_SIDE = 920;       // crisp resolution when camera is
 const CLOUD_RENDER_MOVING_LONG_SIDE = 640;    // fast resolution during active pan/zoom/pitch
 // When the camera is idle, cloud drift updates at ~22fps (wind advection is slow), which
 // cuts idle GPU load by ~65% while keeping cloud motion & lightning completely fluid.
-const IDLE_FRAME_INTERVAL_MS = 45;
+const IDLE_FRAME_INTERVAL_MS = 33;
 
 const COMPOSITE_VERTEX_SOURCE = `
   precision mediump float;
@@ -1267,11 +1275,9 @@ export class VolumetricWeatherLayer {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.activeTexture(gl.TEXTURE0);
 
-    // Throttled continuous animation: ~22fps cloud drift while idle. During camera
-    // interaction MapLibre renders every display frame on its own, so pan/zoom stays smooth.
-    if (!isMoving) {
-      this._scheduleIdleFrame();
-    }
+    // Always schedule the next ~30fps wind advection tick so clouds never stop moving
+    // after a camera pan/zoom finishes.
+    this._scheduleIdleFrame();
   }
 
   _ensureRenderTarget(gl, w, h) {
