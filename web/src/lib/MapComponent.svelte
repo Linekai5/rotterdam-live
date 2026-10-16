@@ -2,10 +2,28 @@
   import { onMount, onDestroy } from 'svelte';
   import { initMap } from './map.js';
   import { API_BASE_URL } from './liveLayers.js';
+  import { createWeatherEngineController } from './weatherEngine.js';
+  import WeatherHud from './WeatherHud.svelte';
 
   let mapElement;
   let map = null;
   let pingInterval = null;
+  let weatherController = null;
+  let weatherState = {
+    presetId: 'live',
+    isLive: true,
+    enabled: true,
+    temperatureC: 16.4,
+    cloudCoverPct: 45,
+    precipitationMmH: 0.0,
+    windSpeedKmh: 18.2,
+    windGustsKmh: 26.5,
+    windDirectionDeg: 235,
+    weatherDescription: 'Wisselend bewolkt',
+    altitudePhase: 'MACRO CANOPY',
+    canopyOpacity: 0.90,
+    nodes: []
+  };
 
   // Active background connection with the API
   async function checkApiConnection() {
@@ -24,13 +42,18 @@
     checkApiConnection();
     pingInterval = setInterval(checkApiConnection, 10000);
 
-    // 2. Initialize non-interactive map
+    // 2. Initialize interactive Rotterdam Island map & 60FPS WebGL Weather Engine
     try {
       map = await initMap(mapElement, (loadedMap) => {
         map = loadedMap;
         if (typeof window !== 'undefined') window.map = loadedMap;
       });
       if (typeof window !== 'undefined') window.map = map;
+
+      weatherController = createWeatherEngineController(map, (nextState) => {
+        weatherState = nextState;
+      });
+      if (typeof window !== 'undefined') window.weatherController = weatherController;
     } catch (err) {
       console.error('MapComponent: initMap error!', err);
     }
@@ -49,15 +72,11 @@
 </script>
 
 <div class="map-wrapper">
-  <!-- Map Canvas: Full-screen background, non-interactive -->
+  <!-- Interactive Map Canvas: 60FPS pan, zoom, pitch (0-65°) & bearing rotation -->
   <div bind:this={mapElement} class="map-container" style="background-color: {defaultBg}"></div>
 
-  <!-- Centered "rotterdam will be live soon" div (Basic Dark Style) -->
-  <div class="center-overlay">
-    <div class="message-box">
-      Rotterdam will be live soon
-    </div>
-  </div>
+  <!-- Minimalist Obsidian Tactical Weather HUD Pill & Live/Sim Debug Inspector -->
+  <WeatherHud {weatherController} {weatherState} />
 </div>
 
 <style>
@@ -67,8 +86,7 @@
     width: 100vw;
     height: 100vh;
     overflow: hidden;
-    user-select: none;
-    pointer-events: none;
+    pointer-events: auto;
   }
 
   .map-container {
@@ -77,43 +95,13 @@
     position: absolute;
     inset: 0;
     background-color: #0c0c0c;
-    pointer-events: none;
+    pointer-events: auto;
+    touch-action: none;
   }
 
   .map-container :global(:focus) {
     outline: none !important;
     box-shadow: none !important;
   }
-
-  .center-overlay {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 16px;
-    z-index: 50;
-    pointer-events: none;
-  }
-
-  .message-box {
-    background-color: rgba(14, 14, 14, 0.92);
-    border: 1px solid #2a2a2a;
-    border-radius: 8px;
-    padding: 20px 32px;
-    color: #e5e5e5;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    font-size: 18px;
-    font-weight: 500;
-    letter-spacing: -0.01em;
-    text-align: center;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
-  }
-
-  @media (max-width: 480px) {
-    .message-box {
-      font-size: 16px;
-      padding: 16px 24px;
-    }
-  }
 </style>
+
