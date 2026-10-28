@@ -1,13 +1,15 @@
-"""Hyper-Accurate Live Weather, Precipitation Nowcast & Rain Radar Harvester.
+"""Model weather, point observations/nowcasts, and radar metadata ingestion.
 
 Data Sources:
 1. Buienradar 2-hour Rain Nowcast (gpsgadget.buienradar.nl)
 2. Buienradar & KNMI Official Observation Stations (data.buienradar.nl/2.0/feed/json)
 3. RainViewer Open Radar API (api.rainviewer.com)
+4. Open-Meteo KNMI model grid (api.open-meteo.com)
 """
 import math
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 from geoalchemy2.shape import from_shape
 from shapely.geometry import Point
 from sqlalchemy import select
@@ -380,7 +382,7 @@ def raw_rain_to_mm_h(raw_str: str) -> float:
 
 
 class RotterdamWeatherHarvester(BaseIngestor):
-    """Orchestrates hyper-local weather nowcasts, 12-node spatial weather grid, KNMI telemetry & radar tile streams."""
+    """Validate and cache the model grid, station telemetry, nowcasts and radar metadata."""
 
     def __init__(self):
         super().__init__(name="rotterdam_weather_harvester", timeout_seconds=15.0)
@@ -430,7 +432,10 @@ class RotterdamWeatherHarvester(BaseIngestor):
                         parts = line.strip().split("|")
                         if len(parts) == 2:
                             val_str, t_str = parts[0].strip(), parts[1].strip()
-                            raw_val = int(val_str) if val_str.isdigit() else 0
+                            datetime.strptime(t_str, "%H:%M")
+                            raw_val = int(val_str)
+                            if not 0 <= raw_val <= 255:
+                                raise ValueError("Invalid rain intensity")
                             intensity = raw_rain_to_mm_h(val_str)
                             timeline.append({
                                 "time": t_str,
@@ -446,18 +451,33 @@ class RotterdamWeatherHarvester(BaseIngestor):
                 )
         except Exception as e:
             logger.warning("Failed fetching Buienradar rain nowcast: {}", e)
+            timeline = []
 
-        # Fallback if Buienradar is unreachable: 24 empty 5-min intervals
         now = datetime.now(timezone.utc)
         if not timeline:
-            logger.info("Using empty nowcast fallback for weather:rain")
-            for i in range(24):
-                slot_time = (now + timedelta(minutes=i * 5)).strftime("%H:%M")
-                timeline.append({
-                    "time": slot_time,
-                    "intensity_mm_h": 0.0,
-                    "raw_value": 0,
-                })
+            previous = await get_cached_json(cache_key + ":last_good")
+            if previous:
+                return {**previous, "status": "stale", "summary": "Regenverwachting tijdelijk niet bijgewerkt"}
+            return {
+                "location": {"lat": lat, "lon": lon}, "generated_at": now.isoformat(),
+                "status": "unavailable", "will_rain_in_2h": None,
+                "max_intensity_mm_h": None, "first_rain_in_minutes": None,
+                "summary": "Regenverwachting tijdelijk niet beschikbaar", "timeline": [],
+            }
+
+        # Buienradar returns local clock times. Resolve dates across midnight,
+        # then publish unambiguous UTC timestamps and use actual lead times.
+        local_now = now.astimezone(ZoneInfo("Europe/Amsterdam"))
+        previous_time = None
+        for item in timeline:
+            hour, minute = map(int, item["time"].split(":"))
+            slot = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if slot < local_now - timedelta(minutes=15):
+                slot += timedelta(days=1)
+            if previous_time and slot < previous_time:
+                slot += timedelta(days=1)
+            previous_time = slot
+            item["valid_at"] = slot.astimezone(timezone.utc).isoformat()
 
         will_rain_in_2h = any(item["intensity_mm_h"] > 0 for item in timeline)
         max_intensity = max((item["intensity_mm_h"] for item in timeline), default=0.0)
@@ -470,7 +490,7 @@ class RotterdamWeatherHarvester(BaseIngestor):
         elif will_rain_in_2h:
             for idx, item in enumerate(timeline):
                 if item["intensity_mm_h"] > 0:
-                    first_rain_in_minutes = idx * 5
+                    first_rain_in_minutes = max(0, round((datetime.fromisoformat(item["valid_at"]) - now).total_seconds() / 60))
                     break
 
         # Generate human-readable Dutch summary
@@ -485,6 +505,7 @@ class RotterdamWeatherHarvester(BaseIngestor):
         response_data = {
             "location": {"lat": round(lat, 4), "lon": round(lon, 4)},
             "generated_at": now.isoformat(),
+            "status": "fresh",
             "will_rain_in_2h": will_rain_in_2h,
             "max_intensity_mm_h": max_intensity,
             "first_rain_in_minutes": first_rain_in_minutes,
@@ -494,6 +515,7 @@ class RotterdamWeatherHarvester(BaseIngestor):
 
         # Cache in Redis with 5-minute TTL (300 seconds)
         await set_cached_json(cache_key, response_data, ttl_seconds=300)
+        await set_cached_json(cache_key + ":last_good", response_data, ttl_seconds=86400)
         if abs(lat - ROTTERDAM_DEFAULT_LAT) < 0.05 and abs(lon - ROTTERDAM_DEFAULT_LON) < 0.05:
             await set_cached_json("weather:rain:nowcast:rotterdam", response_data, ttl_seconds=300)
 
@@ -529,6 +551,13 @@ class RotterdamWeatherHarvester(BaseIngestor):
         except Exception as e:
             logger.warning("Failed fetching Buienradar station feed: {}", e)
             raw_stations = []
+
+        if not any(s.get("stationid") in TARGET_KNMI_STATIONS for s in raw_stations):
+            previous = await get_cached_json("weather:stations:last_good")
+            features = previous.get("features", []) if previous else []
+            primary = next((f["properties"] for f in features if f["properties"].get("is_primary")), None)
+            await self._build_and_cache_live_overview(primary, features)
+            return previous or {"type": "FeatureCollection", "features": [], "total_stations": 0}
 
         async with AsyncSessionLocal() as session:
             for s in raw_stations:
@@ -572,7 +601,7 @@ class RotterdamWeatherHarvester(BaseIngestor):
                     "regio": s.get("regio", "Rotterdam"),
                     "district": district,
                     "is_primary": meta["is_primary"],
-                    "timestamp": s.get("timestamp", now.isoformat()),
+                    "timestamp": datetime.fromisoformat(s["timestamp"]).replace(tzinfo=ZoneInfo("Europe/Amsterdam")).astimezone(timezone.utc).isoformat(),
                     "temperature": temp,
                     "feeltemperature": feel_temp,
                     "groundtemperature": ground_temp,
@@ -674,6 +703,7 @@ class RotterdamWeatherHarvester(BaseIngestor):
             "total_stations": len(features),
         }
         await set_cached_json("weather:stations:all", fc, ttl_seconds=600)
+        await set_cached_json("weather:stations:last_good", fc, ttl_seconds=86400)
 
         # Build and cache unified LiveWeatherOverview
         await self._build_and_cache_live_overview(primary_station_data, features)
@@ -692,18 +722,28 @@ class RotterdamWeatherHarvester(BaseIngestor):
             rain_nowcast = await self.fetch_rain_nowcast()
 
         primary = primary_station or (features[0]["properties"] if features else {})
+        observation_time = primary.get("timestamp")
+        if observation_time:
+            observation_dt = datetime.fromisoformat(observation_time)
+            if observation_dt.tzinfo is None:
+                observation_dt = observation_dt.replace(tzinfo=ZoneInfo("Europe/Amsterdam"))
+            if (now - observation_dt).total_seconds() > 1800:
+                primary = {}
+
+        def observed(key, fallback=None):
+            value = primary.get(key)
+            return fallback if value is None else value
 
         temp = primary.get("temperature")
         feel_temp = primary.get("feeltemperature")
-        desc = primary.get("weather_description") or "Bewolkt"
-        wind_bft = primary.get("windspeed_bft") or 3
-        wind_dir = primary.get("winddirection") or "—"
-        wind_kmh = primary.get("windspeed_kmh") or 15.0
+        desc = observed("weather_description", "Bewolkt")
+        wind_bft = observed("windspeed_bft", 3)
+        wind_dir = observed("winddirection", "—")
 
         rain_will_rain = rain_nowcast.get("will_rain_in_2h", False)
         rain_minutes = rain_nowcast.get("first_rain_in_minutes")
-        rain_max = rain_nowcast.get("max_intensity_mm_h", 0.0)
-        is_raining = rain_nowcast.get("timeline", [{}])[0].get("intensity_mm_h", 0.0) > 0
+        rain_max = rain_nowcast.get("max_intensity_mm_h") or 0.0
+        is_raining = bool(rain_nowcast.get("timeline")) and rain_nowcast["timeline"][0]["intensity_mm_h"] > 0
 
         # Construct live summary sentence
         if is_raining:
@@ -712,6 +752,9 @@ class RotterdamWeatherHarvester(BaseIngestor):
             summary = f"{desc} in Rotterdam ({temp}°C), droog komende {rain_minutes} minuten, daarna regen ({rain_max} mm/u)"
         else:
             summary = f"{desc} in Rotterdam ({temp}°C), droog komende 2 uur met matige wind ({wind_bft} Bft {wind_dir})"
+
+        if rain_nowcast.get("status") != "fresh":
+            summary = f"{desc} in Rotterdam; regenverwachting tijdelijk niet beschikbaar"
 
         stations_summary = [
             {
@@ -729,7 +772,7 @@ class RotterdamWeatherHarvester(BaseIngestor):
         ]
 
         radar_data = await get_cached_json("weather:radar:frames")
-        latest_radar_url = radar_data.get("latest_frame", {}).get("tile_url") if radar_data else None
+        latest_radar_url = (radar_data.get("latest_frame") or {}).get("tile_url") if radar_data else None
 
         # Ensure 12-node spatial weather grid is available for unified response
         spatial_grid = await get_cached_json("weather:spatial:grid")
@@ -739,44 +782,53 @@ class RotterdamWeatherHarvester(BaseIngestor):
         city_sum = spatial_grid.get("city_summary", {})
         wind_fld = spatial_grid.get("wind_field", {})
 
+        center = spatial_grid["grid_nodes"][6]
         if temp is None:
-            temp = city_sum.get("temperature_avg_c", 15.8)
+            temp = center["temperature_2m"]
         if feel_temp is None:
-            feel_temp = round(temp - 0.8, 1)
+            feel_temp = center["apparent_temperature"]
+        desc = observed("weather_description", center["weather_description"])
+        wind_bft = observed("windspeed_bft", kmh_to_beaufort(center["wind_speed_10m"]))
+        if not primary:
+            summary = f"{desc} in Rotterdam ({temp}°C); {rain_nowcast['summary']}"
 
         overview = {
             "type": "FeatureCollection",
             "generated_at": now.isoformat(),
+            "data_status": spatial_grid.get("data_status", "stale"),
+            "source": "Open-Meteo / KNMI HARMONIE model",
+            "observed_at": observation_time,
             "ttl_seconds": 120,
             "model": spatial_grid.get("model", "knmi_harmonie_arome"),
             "location": "Rotterdam",
-            "station_name": primary.get("station_name", "Rotterdam Airport"),
-            "station_id": primary.get("station_id", 6344),
+            "station_name": primary.get("station_name", "Rotterdam Centrum (model)"),
+            "station_id": primary.get("station_id"),
             "temperature": temp,
             "feeltemperature": feel_temp,
-            "humidity": primary.get("humidity") or city_sum.get("humidity_avg_pct", 78.0),
-            "airpressure": primary.get("airpressure") or city_sum.get("surface_pressure_avg_hpa", 1016.5),
+            "humidity": observed("humidity", city_sum.get("humidity_avg_pct")),
+            "airpressure": observed("airpressure", city_sum.get("surface_pressure_avg_hpa")),
             "weather_description": desc,
             "icon_url": primary.get("icon_url"),
             "full_icon_url": primary.get("full_icon_url"),
             "wind": {
-                "speed_ms": primary.get("windspeed_ms") or wind_fld.get("mean_speed_ms", 4.5),
-                "speed_kmh": wind_kmh or wind_fld.get("mean_speed_kmh", 16.2),
+                "speed_ms": observed("windspeed_ms", wind_fld.get("mean_speed_ms")),
+                "speed_kmh": observed("windspeed_kmh", wind_fld.get("mean_speed_kmh")),
                 "bft": wind_bft,
-                "gusts_ms": primary.get("windgusts_ms") or round(wind_fld.get("max_gusts_kmh", 25.0) / 3.6, 1),
-                "gusts_kmh": primary.get("windgusts_kmh") or wind_fld.get("max_gusts_kmh", 25.0),
+                "gusts_ms": observed("windgusts_ms", round(wind_fld.get("max_gusts_kmh", 0) / 3.6, 1)),
+                "gusts_kmh": observed("windgusts_kmh", wind_fld.get("max_gusts_kmh")),
                 "direction": wind_dir if wind_dir != "—" else wind_fld.get("direction_compass", "ZW"),
-                "degrees": primary.get("winddirectiondegrees") or wind_fld.get("mean_direction_deg", 230),
+                "degrees": observed("winddirectiondegrees", wind_fld.get("mean_direction_deg")),
                 "u_ms": wind_fld.get("mean_u_ms", 3.4),
                 "v_ms": wind_fld.get("mean_v_ms", 2.9),
             },
             "precipitation": {
-                "current_mm_h": primary.get("precipitation_mm_h") or city_sum.get("precipitation_avg_mm_h") or 0.0,
+                "current_mm_h": observed("precipitation_mm_h", city_sum.get("precipitation_avg_mm_h") or 0.0),
+                "nowcast_status": rain_nowcast.get("status", "unavailable"),
                 "currently_raining": is_raining or (city_sum.get("precipitation_max_mm_h", 0.0) > 0.05),
                 "will_rain_in_2h": rain_will_rain,
                 "first_rain_in_minutes": rain_minutes,
                 "max_expected_mm_h": max(rain_max, city_sum.get("precipitation_max_mm_h", 0.0)),
-                "rainfall_last_hour": primary.get("rainfall_last_hour") or 0.0,
+                "rainfall_last_hour": observed("rainfall_last_hour", 0.0),
             },
             "summary": summary,
             "stations": stations_summary,
@@ -792,57 +844,12 @@ class RotterdamWeatherHarvester(BaseIngestor):
 
         # Cache in Redis with 120-second TTL for sub-5ms delivery
         await set_cached_json("weather:live:rotterdam", overview, ttl_seconds=120)
+        await set_cached_json("weather:live:last_good", overview, ttl_seconds=86400)
         return overview
 
     # =========================================================================
     # 3. 12-POINT ROTTERDAM SPATIAL WEATHER MICRO-GRID (KNMI HARMONIE AROME)
     # =========================================================================
-    def _synthesize_fallback_node_current(
-        self, node: Dict[str, Any], solar_is_day: int
-    ) -> Dict[str, Any]:
-        """
-        Deterministic micro-climate synthesizer for Rotterdam Island when upstream
-        network is unreachable (offline / CI test environments).
-        Models the physical North Sea -> inland gradient from Maasvlakte (3.985E) to Nesselande (4.575E).
-        """
-        # Normalized west-to-east factor: 0.0 at Maasvlakte West -> 1.0 at Nesselande
-        east_t = max(0.0, min(1.0, (node["lon"] - 3.985) / (4.575 - 3.985)))
-        coastal_factor = 1.0 - east_t
-
-        # Coastal nodes have stronger wind, higher marine stratocumulus, cooler daytime temps
-        temp = round(14.8 + east_t * 2.4 + (0.3 if node["zone"] == "urban" else 0.0), 1)
-        humidity = round(88.0 - east_t * 14.0, 1)
-        wind_speed_kmh = round(26.0 - east_t * 11.5, 1)
-        wind_gusts_kmh = round(wind_speed_kmh * (1.42 + 0.12 * coastal_factor), 1)
-        wind_dir_deg = int(round(232 + east_t * 12))
-
-        cloud_low = round(72.0 * coastal_factor + 24.0 * (1.0 - coastal_factor), 1)
-        cloud_mid = round(48.0 * coastal_factor + 20.0, 1)
-        cloud_high = round(15.0 + east_t * 10.0, 1)
-        cloud_total = round(min(100.0, max(cloud_low, cloud_mid * 0.85) + cloud_high * 0.2), 1)
-
-        return {
-            "temperature_2m": temp,
-            "apparent_temperature": round(temp - wind_speed_kmh * 0.06, 1),
-            "relative_humidity_2m": humidity,
-            "is_day": solar_is_day,
-            "precipitation": 0.0,
-            "rain": 0.0,
-            "showers": 0.0,
-            "snowfall": 0.0,
-            "weather_code": 3 if cloud_total > 75 else (2 if cloud_total > 35 else 1),
-            "cloud_cover": cloud_total,
-            "cloud_cover_low": cloud_low,
-            "cloud_cover_mid": cloud_mid,
-            "cloud_cover_high": cloud_high,
-            "surface_pressure": round(1017.2 + east_t * 0.6, 1),
-            "wind_speed_10m": wind_speed_kmh,
-            "wind_direction_10m": wind_dir_deg,
-            "wind_gusts_10m": wind_gusts_kmh,
-            "visibility": round(24000.0 + east_t * 16000.0, 1),
-            "cape": round(35.0 * coastal_factor + 15.0, 1),
-        }
-
     def _build_grid_node_payload(
         self,
         node_meta: Dict[str, Any],
@@ -851,13 +858,19 @@ class RotterdamWeatherHarvester(BaseIngestor):
         solar_is_day: int,
     ) -> Dict[str, Any]:
         """Normalize raw Open-Meteo / KNMI HARMONIE node readings into shader-ready telemetry."""
-        fallback = self._synthesize_fallback_node_current(node_meta, solar_is_day)
+        required = OPEN_METEO_CURRENT_FIELDS.split(",")
+        if not current.get("time") or any(
+            not isinstance(current.get(key), (int, float)) or not math.isfinite(current[key])
+            for key in required
+        ):
+            raise ValueError("Incomplete upstream weather data")
+        interval = current.get("interval")
+        if not isinstance(interval, (int, float)) or not math.isfinite(interval) or interval <= 0:
+            raise ValueError("Missing precipitation accumulation interval")
 
         def val(key: str, default_val: Any = None) -> Any:
-            v = current.get(key)
-            if v is None:
-                return fallback.get(key, default_val)
-            return v
+            value = current[key]
+            return value * 3600.0 / interval if key in ("precipitation", "rain", "showers", "snowfall") else value
 
         cloud_cover = float(max(0.0, min(100.0, val("cloud_cover", 45.0))))
         cloud_low = float(max(0.0, min(100.0, val("cloud_cover_low", cloud_cover * 0.6))))
@@ -903,14 +916,11 @@ class RotterdamWeatherHarvester(BaseIngestor):
 
         # Compute normalized WebGL shader fog/mist density [0.0..1.0]
         vis_fog = max(0.0, min(1.0, (4500.0 - visibility) / 4000.0)) if visibility < 4500.0 else 0.0
-        hum_fog = max(0.0, min(1.0, (humidity - 90.0) / 10.0)) if humidity > 90.0 else 0.0
         code_fog = 0.85 if w_code in (45, 48) else 0.0
         zone_boost = 1.15 if node_meta["zone"] in ("coastal", "harbor", "river") else 1.0
-        fog_density = round(min(1.0, max(code_fog, max(vis_fog, hum_fog * 0.55) * zone_boost)), 3)
+        fog_density = round(min(1.0, max(code_fog, vis_fog * zone_boost)), 3)
 
-        lightning_active = bool(
-            w_code in (95, 96, 99) or cape >= 800.0 or (precip >= 6.5 and gusts_kmh >= 55.0)
-        )
+
 
         return {
             "node_id": node_meta["node_id"],
@@ -921,7 +931,7 @@ class RotterdamWeatherHarvester(BaseIngestor):
             "zone": node_meta["zone"],
             "lat": node_meta["lat"],
             "lon": node_meta["lon"],
-            "timestamp": str(current.get("time") or now_iso),
+            "timestamp": datetime.fromisoformat(current["time"]).replace(tzinfo=timezone.utc).isoformat(),
             "cloud_cover": cloud_cover,
             "cloud_cover_low": cloud_low,
             "cloud_cover_mid": cloud_mid,
@@ -948,7 +958,7 @@ class RotterdamWeatherHarvester(BaseIngestor):
             "is_day": is_day,
             "storm_intensity": storm_intensity,
             "fog_density": fog_density,
-            "lightning_active": lightning_active,
+            "lightning_active": False,
         }
 
     async def fetch_spatial_weather_grid(
@@ -989,7 +999,18 @@ class RotterdamWeatherHarvester(BaseIngestor):
             else:
                 logger.warning("Open-Meteo KNMI grid query returned status {}", resp.status_code)
         except Exception as e:
-            logger.warning("Open-Meteo KNMI 12-node grid query failed, using deterministic synthesis: {}", e)
+            logger.warning("Open-Meteo KNMI 12-node grid query failed, retaining last successful snapshot: {}", e)
+
+        try:
+            if len(raw_nodes_list) != 12:
+                raise ValueError("Incomplete spatial grid")
+            for node, current in zip(ROTTERDAM_WEATHER_GRID_NODES, raw_nodes_list):
+                self._build_grid_node_payload(node, current, now_iso, solar["is_day"])
+        except (ValueError, TypeError):
+            previous = await get_cached_json("weather:spatial:last_good")
+            if previous:
+                return {**previous, "data_status": "stale"}
+            raise ValueError("Weather provider unavailable and no previous observations exist")
 
         features: List[Dict[str, Any]] = []
         grid_nodes: List[Dict[str, Any]] = []
@@ -1076,7 +1097,7 @@ class RotterdamWeatherHarvester(BaseIngestor):
         max_precip = max(precips)
         max_gusts = max(gusts)
         max_cape = max(capes)
-        is_thunder = any(n["lightning_active"] for n in grid_nodes)
+        is_thunder = any(n["weather_code"] in (95, 96, 99) for n in grid_nodes)
         is_storm = bool(
             is_thunder
             or max_precip >= 4.0
@@ -1086,23 +1107,12 @@ class RotterdamWeatherHarvester(BaseIngestor):
         coastal_squall = bool(
             any(n["precipitation"] >= 1.5 or n["wind_gusts_10m"] >= 50.0 for n in coastal_nodes)
         )
-        fog_adv = bool(min(visibilities) < 3000.0 or max(humidities) > 92.0 or dominant_code in (45, 48))
-        lightning_prob = round(
-            min(
-                1.0,
-                (0.85 if is_thunder else 0.0)
-                + min(0.5, max_cape / 2000.0)
-                + (0.25 if max_precip >= 4.0 else 0.0),
-            ),
-            2,
-        )
-
         storm_flags = {
             "is_storm": is_storm,
             "is_thunderstorm": is_thunder,
-            "lightning_probability": lightning_prob,
+            "lightning_probability": None,
             "coastal_squall": coastal_squall,
-            "fog_advisory": fog_adv,
+            "fog_advisory": min(visibilities) < 3000.0,
             "active_rain_nodes": sum(1 for n in grid_nodes if n["precipitation"] > 0.05),
             "max_cape_j_kg": round(max_cape, 1),
             "max_precipitation_mm_h": round(max_precip, 2),
@@ -1112,6 +1122,8 @@ class RotterdamWeatherHarvester(BaseIngestor):
         grid_response = {
             "type": "FeatureCollection",
             "generated_at": now_iso,
+            "data_status": "fresh" if all(-300 <= (now - datetime.fromisoformat(n["timestamp"])).total_seconds() <= 1800 for n in grid_nodes) else "stale",
+            "source": "Open-Meteo / KNMI HARMONIE model",
             "ttl_seconds": 120,
             "model": "knmi_harmonie_arome",
             "total_nodes": n_count,
@@ -1125,6 +1137,7 @@ class RotterdamWeatherHarvester(BaseIngestor):
 
         # Cache in Redis with 120s TTL (<5ms SLA)
         await set_cached_json("weather:spatial:grid", grid_response, ttl_seconds=120)
+        await set_cached_json("weather:spatial:last_good", grid_response, ttl_seconds=86400)
 
         if sync_live_overview:
             existing_stations_fc = await get_cached_json("weather:stations:all")
@@ -1198,7 +1211,7 @@ class RotterdamWeatherHarvester(BaseIngestor):
                 "tile_url": tile_url,
             })
 
-        latest_frame = past_frames[-1] if past_frames else (nowcast_frames[0] if nowcast_frames else None)
+        latest_frame = past_frames[-1] if past_frames else None
 
         response_data = {
             "host": host,

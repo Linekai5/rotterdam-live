@@ -271,7 +271,7 @@ async def test_spatial_weather_grid_endpoint_and_redis_sla():
 
 
 @pytest.mark.asyncio
-async def test_live_weather_includes_spatial_grid_and_offline_fallback():
+async def test_live_weather_includes_spatial_grid():
     """Verify GET /api/v1/weather/live includes 12-point spatial mesh and deterministic fallback logic."""
     from app.ingestion.weather_harvester import (
         RotterdamWeatherHarvester,
@@ -284,6 +284,9 @@ async def test_live_weather_includes_spatial_grid_and_offline_fallback():
         storm_props = harvester._build_grid_node_payload(
             ROTTERDAM_WEATHER_GRID_NODES[0],
             {
+                "time": "2026-10-16T12:00",
+                "interval": 3600,
+                "apparent_temperature": 10.0,
                 "cloud_cover": 100.0,
                 "cloud_cover_low": 95.0,
                 "cloud_cover_mid": 90.0,
@@ -308,7 +311,7 @@ async def test_live_weather_includes_spatial_grid_and_offline_fallback():
         )
         assert storm_props["storm_intensity"] >= 0.85
         assert storm_props["fog_density"] > 0.5
-        assert storm_props["lightning_active"] is True
+        assert storm_props["lightning_active"] is False
     finally:
         await harvester.close()
 
@@ -326,3 +329,65 @@ async def test_live_weather_includes_spatial_grid_and_offline_fallback():
         assert data["wind_field"] is not None
         assert data["storm_flags"] is not None
 
+
+
+def test_grid_converts_interval_amounts_and_preserves_calm_north_wind():
+    from app.ingestion.weather_harvester import RotterdamWeatherHarvester, ROTTERDAM_WEATHER_GRID_NODES, OPEN_METEO_CURRENT_FIELDS
+    current = dict.fromkeys(OPEN_METEO_CURRENT_FIELDS.split(','), 0.0)
+    current.update(time='2026-10-28T12:00', interval=900, precipitation=0.5, rain=0.5,
+                   temperature_2m=10, apparent_temperature=9, surface_pressure=1020, visibility=20000)
+    node = RotterdamWeatherHarvester()._build_grid_node_payload(ROTTERDAM_WEATHER_GRID_NODES[6], current, '', 1)
+    assert node['precipitation'] == 2.0
+    assert node['rain'] == 2.0
+    assert node['wind_speed_10m'] == 0
+    assert node['wind_direction_10m'] == 0
+    assert node['timestamp'].endswith('+00:00')
+    current['interval'] = 0
+    with pytest.raises(ValueError):
+        RotterdamWeatherHarvester()._build_grid_node_payload(ROTTERDAM_WEATHER_GRID_NODES[6], current, '', 1)
+    with pytest.raises(ValueError):
+        RotterdamWeatherHarvester()._build_grid_node_payload(ROTTERDAM_WEATHER_GRID_NODES[6], {}, '', 1)
+
+
+@pytest.mark.asyncio
+async def test_rain_outage_is_not_a_dry_forecast(monkeypatch):
+    from app.ingestion import weather_harvester as module
+    async def no_cache(key): return None
+    class Offline:
+        async def get(self, *args, **kwargs): raise httpx.ConnectError('offline')
+    harvester = module.RotterdamWeatherHarvester()
+    async def client(): return Offline()
+    monkeypatch.setattr(module, 'get_cached_json', no_cache)
+    monkeypatch.setattr(harvester, 'get_client', client)
+    result = await harvester.fetch_rain_nowcast()
+    assert result['status'] == 'unavailable'
+    assert result['will_rain_in_2h'] is None
+    assert result['timeline'] == []
+
+
+@pytest.mark.asyncio
+async def test_grid_outage_preserves_original_timestamp(monkeypatch):
+    from app.ingestion import weather_harvester as module
+    previous = {'generated_at': '2026-10-28T12:00:00+00:00', 'grid_nodes': [], 'data_status': 'fresh'}
+    async def cache(key): return previous
+    class Offline:
+        async def get(self, *args, **kwargs): raise httpx.ConnectError('offline')
+    harvester = module.RotterdamWeatherHarvester()
+    async def client(): return Offline()
+    monkeypatch.setattr(module, 'get_cached_json', cache)
+    monkeypatch.setattr(harvester, 'get_client', client)
+    result = await harvester.fetch_spatial_weather_grid()
+    assert result['generated_at'] == previous['generated_at']
+    assert result['data_status'] == 'stale'
+    assert previous['data_status'] == 'fresh'
+
+
+@pytest.mark.asyncio
+async def test_live_endpoint_returns_503_without_upstream_or_history(monkeypatch):
+    from app.api.v1 import weather as module
+    async def cache(key): return None
+    async def unavailable(**kwargs): raise ValueError('offline')
+    monkeypatch.setattr(module, 'get_cached_json', cache)
+    monkeypatch.setattr(module._harvester, 'fetch_spatial_weather_grid', unavailable)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        assert (await client.get('/api/v1/weather/live')).status_code == 503

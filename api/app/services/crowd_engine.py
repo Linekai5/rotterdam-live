@@ -441,10 +441,10 @@ async def fetch_current_weather(session: AsyncSession) -> Dict[str, Any]:
         if cached_live:
             if "temperature" in cached_live and cached_live["temperature"] is not None:
                 weather["temperature_c"] = float(cached_live["temperature"])
-            if "precipitation_mm_h" in cached_live and cached_live["precipitation_mm_h"] is not None:
-                weather["precipitation_mm_h"] = float(cached_live["precipitation_mm_h"])
-            if "windspeed_bft" in cached_live and cached_live["windspeed_bft"] is not None:
-                weather["wind_bft"] = int(cached_live["windspeed_bft"])
+            if cached_live.get("precipitation", {}).get("current_mm_h") is not None:
+                weather["precipitation_mm_h"] = float(cached_live["precipitation"]["current_mm_h"])
+            if cached_live.get("wind", {}).get("bft") is not None:
+                weather["wind_bft"] = int(cached_live["wind"]["bft"])
             if "summary" in cached_live:
                 weather["condition"] = cached_live["summary"]
             return weather

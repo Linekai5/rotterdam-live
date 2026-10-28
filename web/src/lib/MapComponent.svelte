@@ -9,21 +9,7 @@
   let map = null;
   let pingInterval = null;
   let weatherController = null;
-  let weatherState = {
-    presetId: 'live',
-    isLive: true,
-    enabled: true,
-    temperatureC: 16.4,
-    cloudCoverPct: 45,
-    precipitationMmH: 0.0,
-    windSpeedKmh: 18.2,
-    windGustsKmh: 26.5,
-    windDirectionDeg: 235,
-    weatherDescription: 'Wisselend bewolkt',
-    altitudePhase: 'MACRO CANOPY',
-    canopyOpacity: 0.90,
-    nodes: []
-  };
+  let weatherState = { status: 'unavailable', enabled: true, nodes: [] };
 
   // Active background connection with the API
   async function checkApiConnection() {
@@ -42,7 +28,7 @@
     checkApiConnection();
     pingInterval = setInterval(checkApiConnection, 10000);
 
-    // 2. Initialize interactive Rotterdam Island map & 60FPS WebGL Weather Engine
+    // 2. Initialize the map and validated live weather controller.
     try {
       map = await initMap(mapElement, (loadedMap) => {
         map = loadedMap;
@@ -72,10 +58,10 @@
 </script>
 
 <div class="map-wrapper">
-  <!-- Interactive Map Canvas: 60FPS pan, zoom, pitch (0-65°) & bearing rotation -->
+  <!-- Interactive map: pan, zoom, pitch (0-65°) and bearing rotation. -->
   <div bind:this={mapElement} class="map-container" style="background-color: {defaultBg}"></div>
 
-  <!-- Minimalist Obsidian Tactical Weather HUD Pill & Live/Sim Debug Inspector -->
+  <!-- Live weather card with source time, status and radar attribution. -->
   <WeatherHud {weatherController} {weatherState} />
 </div>
 

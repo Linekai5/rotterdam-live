@@ -7,6 +7,7 @@ class RainTimelineItem(BaseModel):
     """Minute-by-minute rain nowcast item."""
     time: str = Field(..., description="Timestamp in HH:MM format")
     intensity_mm_h: float = Field(..., description="Precipitation rate in mm/hour")
+    valid_at: Optional[str] = None
     raw_value: int = Field(..., description="Raw Buienradar string value (000-255)")
 
 
@@ -14,8 +15,9 @@ class RainForecastResponse(BaseModel):
     """Hyper-local 2-hour rain nowcast response."""
     location: Dict[str, float] = Field(..., description="Target coordinates {'lat': float, 'lon': float}")
     generated_at: str = Field(..., description="Generation timestamp in ISO 8601 UTC")
-    will_rain_in_2h: bool = Field(..., description="True if rain is expected within the next 2 hours")
-    max_intensity_mm_h: float = Field(..., description="Peak precipitation intensity expected in next 2 hours")
+    status: Literal["fresh", "stale", "unavailable"] = "unavailable"
+    will_rain_in_2h: Optional[bool] = Field(..., description="True if rain is expected within the next 2 hours")
+    max_intensity_mm_h: Optional[float] = Field(..., description="Peak precipitation intensity expected in next 2 hours")
     first_rain_in_minutes: Optional[int] = Field(None, description="Minutes until first rain, or null if dry")
     summary: str = Field(..., description="Human-readable rain summary in Dutch")
     timeline: List[RainTimelineItem] = Field(..., description="Chronological 5-minute nowcast timeline")
@@ -170,7 +172,7 @@ class StormFlags(BaseModel):
     """Active atmospheric hazard flags for WebGL storm rendering & tactical HUD."""
     is_storm: bool = Field(..., description="True if heavy precipitation (>=4mm/h), high gusts, or WMO storm code")
     is_thunderstorm: bool = Field(..., description="True if WMO thunderstorm (95, 96, 99) or high CAPE")
-    lightning_probability: float = Field(..., description="Probability [0.0..1.0] of in-cloud sheet lightning")
+    lightning_probability: Optional[float] = Field(..., description="Probability [0.0..1.0] of in-cloud sheet lightning")
     coastal_squall: bool = Field(..., description="True if coastal nodes experience squall conditions")
     fog_advisory: bool = Field(..., description="True if visibility < 3000m or relative humidity > 92%")
     active_rain_nodes: int = Field(..., description="Number of grid nodes (out of 12) currently experiencing precipitation")
@@ -201,6 +203,9 @@ class SpatialWeatherGridResponse(BaseModel):
     """RFC 7946 GeoJSON FeatureCollection for the 12-point Rotterdam Spatial Weather Grid."""
     type: Literal["FeatureCollection"] = "FeatureCollection"
     generated_at: str = Field(..., description="ISO 8601 UTC generation timestamp")
+    data_status: Literal["fresh", "stale"] = "stale"
+    source: str = "Open-Meteo / KNMI HARMONIE model"
+    observed_at: Optional[str] = None
     ttl_seconds: int = Field(120, description="Redis cache TTL in seconds")
     model: str = Field("knmi_harmonie_arome", description="Upstream numerical weather model")
     total_nodes: int = Field(12, description="Number of spatial grid nodes covering Rotterdam Island")
@@ -216,11 +221,14 @@ class LiveWeatherOverview(BaseModel):
     """Instant unified overview + 12-point GeoJSON Spatial Weather Grid of Rotterdam."""
     type: Literal["FeatureCollection"] = "FeatureCollection"
     generated_at: str = Field(..., description="ISO 8601 UTC timestamp")
+    data_status: Literal["fresh", "stale"] = "stale"
+    source: str = "Open-Meteo / KNMI HARMONIE model"
+    observed_at: Optional[str] = None
     ttl_seconds: int = Field(120, description="Redis cache TTL in seconds")
     model: str = Field("knmi_harmonie_arome", description="Upstream NWP model identifier")
     location: str = Field("Rotterdam", description="Primary city location")
     station_name: str = Field(..., description="Primary observation station name")
-    station_id: int = Field(..., description="Primary observation station ID")
+    station_id: Optional[int] = Field(None, description="Primary observation station ID; null for model-only conditions")
     temperature: Optional[float] = Field(None, description="Current air temperature in °C")
     feeltemperature: Optional[float] = Field(None, description="Feels-like temperature in °C")
     humidity: Optional[float] = Field(None, description="Relative humidity %")

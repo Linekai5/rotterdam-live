@@ -1,11 +1,11 @@
 # Rotterdam Live Platform — Master Architectural Specification & Operational Status
 
 > [!NOTE]
-> **Platform Version:** 2.3.0 (Spatial Weather Engine, 12-Node Volumetric Mesh, 60FPS WebGL Cloud Dynamics, Elastic Island Camera Physics & CI/CD Automation)  
-> **Environment:** Hetzner Cloud Linux VPS (`46.224.227.187` / Tailscale `100.70.237.40`)  
-> **Unified Repository:** [`github.com/Linekai5/rotterdam-live`](https://github.com/Linekai5/rotterdam-live) (`feat/live-spatial-weather` branch)  
-> **Interactive Documentation:** `https://rotterdamlive.nl/docs` | `https://rotterdamlive.nl/redoc`  
-> **Production Status:** 100% Operational (7 Docker Containers Healthy, 88/88 Backend Tests Passing, 5/5 Frontend Test Suites Passing, Valid Let's Encrypt TLS)
+> **Architecture Revision:** 2.4.0 — 28 October 2026 (Live Weather Validation, Observed Rain Radar, Volumetric Clouds & Muted Weather UI; application package versions are unchanged)
+> **Environment:** Hetzner Cloud Linux VPS (`46.224.227.187` / Tailscale `100.70.237.40`)
+> **Unified Repository:** [`github.com/Linekai5/rotterdam-live`](https://github.com/Linekai5/rotterdam-live) (`malidev` development branch; `main` is the deployment branch)
+> **Interactive Documentation:** `https://rotterdamlive.nl/docs` | `https://rotterdamlive.nl/redoc`
+> **Verification Scope:** Weather changes were implemented and checked locally on ports 5173/8000. They have not been deployed to production in this session. Historical infrastructure figures elsewhere in this document are a platform baseline, not a fresh production audit. See sections 10–12 for validation and limitations.
 
 ---
 
@@ -16,8 +16,8 @@ The **Rotterdam Live Platform** (`rotterdam-live`) is an asynchronous, high-thro
 The platform combines a **PostGIS 16 spatial data store** holding over **396,400 indexed spatial records**, an **in-memory Redis 7 cache**, a **FastAPI asynchronous application service**, an **APScheduler ingestion worker daemon**, a **Svelte / MapLibre GL frontend client**, and an **Nginx reverse proxy** enforcing strict rate limiting and security boundaries.
 
 ### Core Architectural Invariants:
-1. **Sub-30ms GeoJSON SLA:** Sub-5ms cached in Redis; <30ms on database cache miss using PostGIS GiST and `pg_trgm` GIN indexed tables.
-2. **Zero In-Request Computation:** No spatial joins, LineString clipping, external API polling, or regression calculations are ever executed during client HTTP requests. All geospatial datasets are pre-compiled asynchronously by background harvesters.
+1. **Cached GeoJSON Performance Target:** Prefer Redis snapshots and indexed PostGIS queries. The historical sub-5ms cache / sub-30ms database figures are targets and prior measurements, not a guarantee for every endpoint or environment.
+2. **Background Ingestion First:** Precompute spatial datasets asynchronously. Current weather routes still perform on-demand harvesting on cache misses, including external HTTP calls and station database work; those paths do not meet the cache-hit latency target. Eliminating this exception requires separate work.
 3. **Dual Network Topologies:** Public web traffic (`rotterdamlive.nl`) is served with genuine Let's Encrypt TLS; the private administrative API gateway (`api.rotterdamlive.nl`) is routed strictly across Tailscale WireGuard over plain HTTP with HSTS headers cleared (`max-age=0`), preventing browser HSTS lockouts while preserving WireGuard end-to-end encryption.
 4. **Unified Monorepo:** Zero Git submodules. Full commit history preserved via `git subtree` merging backend API and frontend web stacks into a unified monorepo.
 
@@ -39,10 +39,10 @@ The platform combines a **PostGIS 16 spatial data store** holding over **396,400
 | **Background Scheduler** | APScheduler | 3.10+ (AsyncIOScheduler) | Non-blocking async background job scheduler driving 16 ingestion harvesters. |
 | **Geospatial Processing** | Shapely, PyProj, GeoPandas | Latest | Vector geometry manipulation, coordinate transforms (RD New EPSG:28992 ↔ WGS84 EPSG:4326). |
 | **OSM Processing** | PyOsmium / C++ Osmium | Latest | High-speed OpenStreetMap PBF parsing for commercial retail POIs, civic infrastructure, and cameras. |
-| **Frontend Framework** | Svelte 5 / SvelteKit | Latest | Reactive component framework for the situational map application. |
-| **Frontend Bundler** | Vite | 5.x | High-speed ESM bundling, asset optimization, Tailwind integration. |
-| **Map Rendering Engine** | MapLibre GL JS | 4.x | WebGL-accelerated vector tile rendering, GeoJSON layers, custom styling. |
-| **Testing Framework** | pytest + anyio + pytest-asyncio | Latest | Automated testing suite with 88 tests covering API routes, parsers, and spatial schemas. |
+| **Frontend Framework** | Svelte | 5.x | Reactive single-page map application; this client does not use SvelteKit. |
+| **Frontend Bundler** | Vite | 7.x | ESM development server, API proxy, and production asset bundling. |
+| **Map Rendering Engine** | MapLibre GL JS | 2.x (`^2.4.0` in `web/package.json`) | Vector/raster tiles and custom WebGL weather and ocean layers. |
+| **Testing Framework** | pytest, Node test runner, Playwright | Repository dependencies | Backend contracts, spatial geometry, controller freshness, and browser-rendered weather regression checks. |
 | **Containerization** | Docker & Docker Compose | Docker 27+ / Compose v2 | Multi-container microservices architecture with strict host-level port binding. |
 | **CI/CD** | GitHub Actions | Workflows v4 | Path-filtered continuous integration testing and automated zero-downtime SSH deployment. |
 
@@ -77,7 +77,7 @@ flowchart TD
         EVENTS_H["Events Harvester (30m: TM + Stadiums + Festivals)"]
         P2000_H["P2000 Harvester (45s: 112 Emergency Stream)"]
         MOBILITY_H["Mobility Harvester (Garages, Bridges, GBFS)"]
-        WEATHER_H["Weather Harvester (5m: 12-Node Spatial Grid, KNMI & Buienradar)"]
+        WEATHER_H["Weather Harvester (Grid: 120s; Rain/Radar: 5m; Stations: 10m)"]
         UTIL_H["Utilities Harvester (10m: Waterways & Power Outages)"]
         CIVIC_H["Civic Harvester (BAG, Retail, Amenities, Living)"]
     end
@@ -97,7 +97,7 @@ flowchart TD
     end
 
     subgraph "Frontend Client (rotterdam_live_web)"
-        WEB["Svelte 5 + MapLibre GL\n- Interactive Map & Elastic Island Physics\n- 60FPS WebGL Volumetric Cloud Engine\n- Tactical Weather HUD & Live Presets"]
+        WEB["Svelte 5 + MapLibre GL\n- Interactive Map & Elastic Island Physics\n- Two Volumetric Cloud Decks\n- Live Weather Card & Observed Rain Radar"]
     end
 
     NDW & TM & STAD & FEST & P2000 & RWS & MUN & STEDIN & BAG & OSM & WEATHER & RADAR & CBS & DCMR & DONKEY --> SCHED
@@ -114,14 +114,14 @@ flowchart TD
 
 ## 4. Production Container & Network Topology
 
-All services are orchestrated via [`docker-compose.prod.yml`](file:///home/homeaccount/rotterdam-live/docker-compose.prod.yml) on the isolated Docker bridge network `rotterdam_net`:
+All services are orchestrated via `docker-compose.prod.yml` on the isolated Docker bridge network `rotterdam_net`:
 
 | Container Name | Base Image | Host IP & Port Binding | Internal Port | Persistent Volume | Healthcheck Definition |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **`rotterdam_live_nginx`** | `nginx:stable-alpine` | `46.224.227.187:80->80`<br>`46.224.227.187:443->443`<br>`100.70.237.40:80->8080` | `80`, `443`, `8080` | `/etc/letsencrypt` (ro)<br>`rotterdam_live_certbot_www` | `wget -qO- http://127.0.0.1:8080/health/live` (15s interval) |
-| **`rotterdam_live_api`** | `python:3.11-slim` | `127.0.0.1:8000->8000` | `8000` | Bind-mounted `./api:/app` | `curl -f http://localhost:8000/health/live` (10s interval) |
+| **`rotterdam_live_api`** | `python:3.12-slim` | `127.0.0.1:8000->8000` | `8000` | Bind-mounted `./api:/app` | `curl -f http://localhost:8000/health/live` (10s interval) |
 | **`rotterdam_live_web`** | `nginx:alpine` (Svelte build) | None (Internal Only) | `80` | Built assets `/usr/share/nginx/html` | `wget -qO- http://127.0.0.1:80/` (10s interval) |
-| **`rotterdam_live_worker`** | `python:3.11-slim` | None (Internal Daemon) | None | Bind-mounted `./api:/app` | Managed by internal process supervisor and scheduler telemetry |
+| **`rotterdam_live_worker`** | `python:3.12-slim` | None (Internal Daemon) | None | Bind-mounted `./api:/app` | Managed by internal process supervisor and scheduler telemetry |
 | **`rotterdam_live_db`** | `postgis/postgis:16-3.4` | `127.0.0.1:5432->5432` | `5432` | `rotterdam_live_pgdata` | `pg_isready -U postgres -d rotterdamlive` (5s interval) |
 | **`rotterdam_live_redis`** | `redis:7-alpine` | `127.0.0.1:6379->6379` | `6379` | `rotterdam_live_redisdata` | `redis-cli ping` (5s interval) |
 | **`rotterdam_live_certbot`** | `certbot/certbot:latest` | None | None | `/etc/letsencrypt`<br>`rotterdam_live_certbot_www` | 12-hour renewal daemon loop (`certbot renew --quiet`) |
@@ -162,7 +162,7 @@ The background worker daemon (`worker.py`) executes 16 distinct harvesters manag
 | **`P2000Ingestor`** | 45 seconds | Veiligheidsregio Rotterdam-Rijnmond (Capcodes) | `live_events` | Classifies 112 emergency dispatches (Brandweer, Ambulance, Politie); extracts priority (A1, A2, B) and geocodes street names. |
 | **`MobilityIngestor`** | 60 seconds | Gemeente Rotterdam Open Data, Donkey Republic, OpenOV | `live_events` | Tracks parking garage occupancy percentages, bridge open/close operational states, shared bike GBFS stations, and GTFS transit delays. |
 | **`RoadworksIngestor`** | 15 minutes | Gemeente Rotterdam VGW System | `live_events` | Extracts permitted road closures, lane reductions, and municipal infrastructure works. |
-| **`RotterdamWeatherHarvester`** | 5 minutes | KNMI Stations 2.0, Open-Meteo / KNMI HARMONIE-AROME, Buienradar API, RainViewer | `weather:spatial:grid`<br>`weather:live:rotterdam`<br>`weather:stations:live`<br>`weather:radar:live` | Computes a high-resolution 12-point spatial weather mesh across Rotterdam Island (Maasvlakte West to Nesselande). Ingests tri-deck cloud cover fractions (low, mid, high, total %), precipitation rates, horizontal visibility, CAPE, wind speed/gusts/direction, explicit $(u, v)$ wind advection vectors, real-time ground solar azimuth/elevation, and ground cloud shadow projection vectors. Ingests 5-minute Buienradar nowcasts and airport station telemetry. |
+| **`RotterdamWeatherHarvester`** | Grid: 120 seconds; rain nowcast/radar: 5 minutes; stations: 10 minutes | Open-Meteo `knmi_seamless`, Buienradar station and raintext feeds, RainViewer | `weather:spatial:grid`<br>`weather:live:rotterdam`<br>`weather:stations:all`<br>`weather:radar:frames` | Validates the existing 12-point mesh, normalizes accumulation amounts to hourly rates, preserves source times and zero readings, and retains labelled last-good snapshots during provider failures. Stations also update PostGIS amenities/live events. See section 12 for contracts, cache keys, and renderer limits. |
 | **`UtilitiesIngestor`** | 10 minutes | Rijkswaterstaat Waterinfo, Stedin Power Outages | `live_events` | Tracks Nieuwe Maas and river NAP water levels and real-time Stedin electrical grid blackout polygons. |
 | **`RotterdamCameraHarvester`** | 6 hours | Gemeente Rotterdam Traffic Cameras | `live_events` | Parses municipal surveillance cameras and outdoor traffic feeds. |
 | **`RotterdamBAGHarvester`** | 7 days | Kadaster / PDOK BAG WFS 2.0 | `rotterdam_addresses` | Streams all 382,814 official municipal residential and commercial doorways with RD New (EPSG:28992) to WGS84 transform. |
@@ -292,7 +292,7 @@ erDiagram
 
 ## 8. Complete REST API Endpoint Catalog
 
-All API endpoints return RFC 7946 GeoJSON or structured JSON. Responses feature RFC 7232 ETag conditional caching and sub-5ms Redis delivery:
+API endpoints return RFC 7946 GeoJSON or structured JSON. ETag support and latency depend on the route; the weather routes use Redis snapshots but do not implement their own ETag/304 contract:
 
 ### Root & Operational Endpoints
 * `GET /` — Service identification and API gateway entry point.
@@ -335,11 +335,12 @@ All API endpoints return RFC 7946 GeoJSON or structured JSON. Responses feature 
 ### Situational, Environmental & Spatial Baselines
 * `GET /api/v1/live` — Consolidated multi-layer situational feed (active 112 emergencies, mobility alerts, weather warnings).
 * `GET /api/v1/emergencies` — Real-time P2000 emergency dispatches (Brandweer, Ambulance, Politie).
-* `GET /api/v1/weather/live` — **Unified Live Weather Overview:** City-wide summary metrics, $(u, v)$ wind vector field, live solar azimuth/elevation, storm flags, and 12-point spatial weather grid GeoJSON FeatureCollection.
-* `GET /api/v1/weather/grid` — **12-Point Spatial Weather Grid:** High-resolution spatial weather mesh across Rotterdam Island (KNMI HARMONIE-AROME), cloud cover decks (low/mid/high %), $(u, v)$ advection vectors, ground shadow projection vectors, CAPE, visibility, and storm/fog flags.
-* `GET /api/v1/weather/stations` — Live KNMI weather station telemetry and GeoJSON stations.
-* `GET /api/v1/weather/rain-forecast` — Hyper-local 2-hour minute-by-minute rain nowcast for Rotterdam coordinates.
-* `GET /api/v1/weather/radar` — Real-time RainViewer radar map tile URL and timestamp metadata.
+* `GET /api/v1/weather/live` — Unified station/model overview with `grid_nodes`, GeoJSON features, solar data, `source`, `data_status`, and `observed_at`. The map HUD reads the Centrum grid node rather than the station-preferred top-level summary. Returns labelled stale history or HTTP 503 when no usable weather is available.
+* `GET /api/v1/weather/grid` — Existing 12-point KNMI model sample mesh with low/middle/high/total cloud cover, normalized precipitation rates, wind vectors, solar data, and model-derived flags. Sampling/interpolation does not add observed neighbourhood detail.
+* `GET /api/v1/weather/stations` — Buienradar-distributed KNMI station observations with source timestamps, returned as GeoJSON.
+* `GET /api/v1/weather/stations/{station_id}` — A single station (6344 airport, 6330 Hoek van Holland, 6343 Geulhaven), or HTTP 404 if unavailable.
+* `GET /api/v1/weather/rain-forecast` — Approximately two hours of five-minute Buienradar point predictions, with UTC `valid_at` per slot and `status` of `fresh`, `stale`, or `unavailable`; missing rain information is not a dry forecast.
+* `GET /api/v1/weather/radar` — RainViewer frame metadata/tile URLs. `latest_frame` is selected from past radar frames only. The frontend displays the latest observed frame; it does not animate a forecast timeline.
 * `GET /api/v1/environment` — DCMR air quality sensor readings (NO2, PM2.5, PM10).
 * `GET /api/v1/utilities/power-outages` — Stedin electrical grid blackout alerts and affected postal codes.
 * `GET /api/v1/spatial/districts` — Canonical CBS/PDOK boundary polygons of the 19 Rotterdam municipal districts.
@@ -352,84 +353,163 @@ All API endpoints return RFC 7946 GeoJSON or structured JSON. Responses feature 
 
 ## 9. Frontend Architecture (Svelte 5, MapLibre GL & WebGL Weather Engine)
 
-The frontend client resides in [`web/`](file:///home/homeaccount/rotterdam-live/web) and compiles via Vite 7 into a high-performance reactive geospatial SPA:
+The `web/` Svelte 5 SPA is bundled by Vite 7. `App.svelte` mounts `MapComponent.svelte`, which initializes MapLibre, the existing ocean/camera layers, the weather controller, and `WeatherHud.svelte`.
 
-* **Framework & Tooling:** Svelte 5 (Runes reactivity, zero runtime overhead) bundled with Vite 7.
-* **Map Engine:** MapLibre GL JS with custom dark vector and satellite raster styles (PDOK 2026 high-resolution aerial imagery with 256-pixel Web Mercator tiles through zoom 21).
-* **Interactive Map Physics & Elastic Island Boundary:**
-  - Implemented in [`web/src/lib/cameraPhysics.js`](file:///home/homeaccount/rotterdam-live/web/src/lib/cameraPhysics.js).
-  - Unlocked 60 FPS full interactive canvas: pan, zoom, pitch (0°–65° for dynamic 3D horizon perspectives), and 360° bearing rotation.
-  - Responsive `minZoom` clamping dynamically adjusted to viewport dimensions to ensure Rotterdam island fills the display.
-  - Elastic boundary physics anchoring the map camera to the Rotterdam municipal contour with smooth deceleration and restitution, preventing drifting into void ocean space.
-* **60 FPS WebGL Volumetric Spatial Weather Engine:**
-  - Implemented in [`web/src/lib/weatherEngine.js`](file:///home/homeaccount/rotterdam-live/web/src/lib/weatherEngine.js) as a custom MapLibre WebGL layer (`coastal-ocean` / weather canvas).
-  - **3D World-Space Volumetric Clouds:** Multi-octave Worley cellular billows combined with low-frequency FBM domain warping rendered across multiple altitude slices.
-  - **Real-Time KNMI Wind Advection:** Clouds glide naturally across the viewport along the live wind vector without unnatural boiling noise or artifacting.
-  - **"Dive Through the Clouds" Altitude Zoom-Fade:** Dynamic multi-phase camera transition (Macro Canopy at low zoom &rarr; Cloud Layer &rarr; Sub-Canopy &rarr; Street Level at high zoom) smoothly attenuating cloud density and revealing street-level details.
-  - **Terrain Cloud Shadows:** Real-time solar azimuth and elevation project directional volumetric cloud shadows onto the satellite and urban base layers.
-  - **High-Performance Reduced-Resolution FBO Pipeline:** Cloud raymarching and advection execute on offscreen framebuffers at fractional resolution before blitting, maintaining a steady 60 FPS even on mobile GPUs without backdrop-filter lag.
-* **Obsidian Tactical Weather HUD & Simulation Controls:**
-  - Implemented in [`web/src/lib/WeatherHud.svelte`](file:///home/homeaccount/rotterdam-live/web/src/lib/WeatherHud.svelte).
-  - Minimalist glassmorphic tactical status pill displaying live KNMI conditions: temperature, cloud cover %, precipitation rate (mm/h), wind speed/gusts/direction, and active altitude canopy phase.
-  - Interactive weather simulation drawer allowing instant toggling between real-time KNMI feeds and calibrated meteorological presets (*Live Telemetry*, *Overcast*, *Atlantic Storm*, *North Sea Squall*, *Summer Clear*, *Clear Night*).
-* **Active Background API Connectivity:**
-  - Automated non-blocking silent health polling (`${API_BASE_URL}/health/live` every 10 seconds) ensuring continuous API availability and automatic fallback handling.
+* **Existing Map Behaviour:** Satellite/vector styles, pan, zoom, pitch to 65°, bearing rotation, responsive minimum zoom, and elastic island boundary behaviour remain in `map.js`, `cameraPhysics.js`, and the ocean modules. Those systems predate this session.
+* **Cloud Layer:** `weatherEngine.js` installs the custom layer `rotterdam-volumetric-weather`. It interpolates the existing 12-node model data, samples two continuous 3D density fields, traces solar illumination through them, and composites cloud colour/opacity over the map. The lower deck combines low/middle cover; the upper deck uses high cover. See section 12.5 for the precise approximation.
+* **Observed Rain Layer:** `live-rain-radar` is a separate MapLibre raster source/layer using the latest past RainViewer frame. It has its own frame age checks and can remain available when model weather is stale.
+* **Weather Card:** A compact charcoal card shows Centrum temperature, condition, wind, cloud cover, model rain rate, status, and valid time. Its expandable details explain the source and the difference between model values and radar. Muted colours, visible attribution, and responsive sizing replace the previous pill/simulator drawer. There are no weather presets or simulator selection methods.
+* **Polling:** Model weather and radar metadata are fetched on initialization and every 60 seconds, with independent 15-second timeouts and overlap guards. Health is polled every 10 seconds; that silent ping is not a weather freshness check or a guarantee of availability.
+* **Local Connection:** In Vite development, the default API base is the page origin. `/api` and `/health` are proxied from port 5173 to `http://localhost:8000`. This works from `localhost:5173` and `127.0.0.1:5173`. `VITE_API_BASE_URL` can override the default and may require CORS configuration. Production public requests use the existing Nginx `/api` gateway.
+* **Rendering Cost:** The offscreen buffer is at most half the drawing-buffer resolution, capped at a 920-pixel long edge while stationary and 640 during movement. A 33ms timer schedules idle repaint requests. A short local headless Chrome sample measured about 30 browser frames/second; 60 FPS and mobile performance are not guaranteed.
 
 ---
 
 ## 10. Automated Testing Suite & CI/CD Pipelines
 
-### Backend API Test Suite (`api/tests/`)
-All 88 unit, integration, and spatial regression tests run inside the container with dedicated event loop isolation:
-* **Test Count:** 88 automated tests
-* **Pass Rate:** **100% (88 passed, 0 failed, 0 warnings)**
-* **Execution Duration:** ~9.5 seconds
-* **Coverage:**
-  - `test_addresses.py`: BAG doorway searches and spatial containment.
-  - `test_api_endpoints.py`: HTTP contracts, ETag handling, and error codes.
-  - `test_crowd.py`: Crowdness formula verification, diurnal weighting, and 24h autoregressive forecast.
-  - `test_events.py`: Temporal filtering (`include_past=False`), stadium venues vs fixtures separation.
-  - `test_geocoding.py`: RD New to WGS84 coordinate projections.
-  - `test_ingestion_parsers.py`: P2000 discipline parsing, NDW traffic feeds, Buienradar tables.
-  - `test_live_ingestion_smoke.py`: Live database integration and snapshot writes.
-  - `test_living.py`: CBS StatLine demographics and housing aggregations.
-  - `test_retail.py`: Osmium OSM shop extractions.
-  - `test_schemas.py`: Pydantic model validations and GeoJSON serialization.
-  - `test_search.py`: GIN trigram text fuzzy matching.
-  - `test_traffic.py`: 18 corridor LineStrings, travel time delays, congestion tier assignments.
-  - `test_weather.py`: KNMI stations, 12-node spatial grid schema validation, and nowcast rain interpolation.
+### Checks Completed During This Session
 
-### Frontend Web Test Suites (`web/tests/`)
-* **Unit & Spatial Geometry Suites (`web/tests/*.test.mjs`):**
-  - Executed via Node native test runner (`npm test` / `node --test tests/*.test.mjs`).
-  - `ocean.test.mjs`: Validates 16-bit Mercator distance fields, exact segment distance calculations, untiled ocean mesh cutouts around Rotterdam island, and river interior blend boundaries.
-  - Camera physics: Asserts elastic island boundary constraints and responsive viewport `minZoom` clamping.
-  - Spatial weather: Asserts 12-node spatial grid interpolation, simulation preset state machines, and altitude zoom-fade curve continuity.
-  - **Pass Rate:** **100% (5 passed, 0 failed, duration ~1.9s)**.
-* **End-to-End Browser Tests (`web/tests/browser/ocean.spec.js`):**
-  - Executed via Playwright across deterministic tile mock fixtures, verifying multi-zoom ocean cutout pixel fidelity (zooms 8–20), pitch/bearing camera transformations, and WebGL context lifecycle.
+| Command / check | Recorded result | What it establishes |
+| :--- | :--- | :--- |
+| `docker exec rotterdam_dev_api python -m pytest tests/test_weather.py tests/test_crowd.py -q` | 32 passed | Relevant backend contracts, precipitation interval conversion, calm/north zero values, unavailable rain, preserved timestamps on outage, and HTTP 503 without data/history. |
+| `npm --prefix web test` | 6 passed | Existing ocean/camera geometry plus weather interpolation and controller rejection of legacy, invalid, and stale snapshots; no preset API. |
+| `npm --prefix web run test:browser -- weather.spec.js` | 1 passed after final renderer changes | A deterministic 82% high-cloud fixture compiles the GLSL program and produces framebuffer pixels containing cloud bodies and clear gaps, rather than only registering a layer. |
+| `npm --prefix web run build` | Passed after final renderer changes | Svelte/Vite production bundle builds. |
+| Browser inspection | Completed | Local API connection, radar/cloud attachment, absence of presets, desktop/mobile layout, and screenshots from overhead and tilted camera views. |
+
+These are scoped local results, not a claim that the entire backend or browser suite was rerun, that all devices achieve the same frame rate, or that the forecasts have been meteorologically validated. The older 88-test/5-test figures were historical and are not the current session result.
+
+`web/tests/browser/ocean.spec.js` remains the existing geometry/lifecycle browser suite. The weather regression is in `web/tests/browser/weather.spec.js`; the controller regression is in `web/tests/weather.test.mjs`. Test weather fixtures are confined to tests and are not selectable in the application.
 
 ### Continuous Integration (`.github/workflows/ci.yml`)
 Automated GitHub Actions workflow triggered on pull requests and pushes to `main`:
 1. **Path-Filtered Matrix:** Only triggers jobs corresponding to modified directories (`api/**`, `web/**`, `nginx/**`).
-2. **Backend Validation:** Boots ephemeral PostgreSQL 16 PostGIS and Redis 7 service containers, installs Python dependencies, runs full 88-test pytest suite.
-3. **Frontend Validation:** Installs Node 20 dependencies, executes SvelteKit build check and bundle linting.
+2. **Backend Validation:** Boots PostgreSQL/PostGIS and Redis service containers, initializes/seeds the database, and runs the backend pytest suite using Python 3.12.
+3. **Frontend Validation:** Installs Node 20 dependencies, runs `npm test`, and builds the Svelte/Vite bundle. The workflow currently does not run Playwright, including the new shader regression; that browser check was run locally.
 4. **Nginx Validation:** Executes syntax and schema validation (`nginx -t`).
 
 ### Continuous Deployment (`.github/workflows/deploy.yml`)
-Automated zero-downtime rolling deployment running via self-hosted GitHub Actions runner:
-* **Runner Architecture:** Native ARM64 self-hosted runner (`hetzner-vps`) running under PM2 supervisor (`id: 0`, online, auto-restarting).
-* **Security Model:** Zero open inbound SSH ports on public internet; connects outbound to GitHub Actions over HTTPS.
-* **Rolling Execution:** Triggered automatically on every merge to `main`. Pulls latest code, builds only modified containers with local Docker caches, executes rolling restart, gracefully reloads Nginx (`nginx -s reload`), and validates `/health/live`.
-* **Execution Duration:** Completed in ~45 seconds from PR merge to live production.
+The workflow is triggered by a push to `main` or manual dispatch and selects a self-hosted runner labelled `self-hosted, rotterdam-vps`. It fetches `main`, builds the production Compose images, recreates API/web/worker services in order, reloads or starts Nginx, and checks health. The workflow name says "zero-downtime", but it does not establish a measured zero-downtime guarantee. This session did not modify or run it. A push to `malidev` does not trigger the automatic production deployment.
 
 ---
 
 ## 11. Operational Verification Metrics & Current Status
 
-* **Production Containers:** All 7 containers up, healthy, and restarting `unless-stopped`.
-* **Public Web HTTPS:** `https://rotterdamlive.nl` responds with `HTTP/2 200` using Let's Encrypt TLS (valid through January 2027) with `Strict-Transport-Security: max-age=31536000` (no subdomain leakage). Verified via native `curl -vI https://rotterdamlive.nl` without `-k`.
-* **Private API Gateway:** `http://api.rotterdamlive.nl` responds with `HTTP/1.1 200` over Tailscale IP `100.70.237.40:80` with `Strict-Transport-Security: max-age=0`.
-* **Port 443 on Tailscale:** Completely closed (`Connection refused`).
-* **Interactive Documentation:** Available at `https://rotterdamlive.nl/docs`.
-* **Git Repository:** Fully synchronized with origin `main` (`Linekai5/rotterdam-live` commit `b4d985c`).
+* **Development Branch:** `malidev`. All seven pre-session weather/map commits from the former feature branch were carried forward by ancestry-preserving branch alignment, followed by the session changes. No changes were merged into `main`.
+* **Local Runtime:** Vite on 5173; FastAPI on 8000; local Docker API, worker, PostGIS and Redis. The worker was restarted so it stopped rewriting caches using the old ingestion code.
+* **Local Verification:** Requests through 5173 reached the 8000 API, the controller received fresh 12-node snapshots, and the radar/cloud layers rendered. Session checks are listed in section 10.
+* **Public Deployment at Initial Audit:** The public weather response lacked the spatial grid and `/api/v1/weather/grid` returned 404. Its served frontend bundle did not contain the new weather-controller identifiers. This was evidence of an older deployment at that time, not a current production health certification.
+* **Deployment Status:** No production deployment occurred in this session. Deploy API, worker and frontend together when publishing the new contract; the current frontend intentionally rejects the older public weather payload.
+
+---
+
+## 12. Live Weather Data Contract, Rendering & Session Changes
+
+### 12.1 Data Sources and End-to-End Flow
+
+| Source | Used for | Important distinction |
+| :--- | :--- | :--- |
+| Open-Meteo forecast endpoint with `models=knmi_seamless` | Temperature, cloud cover by layer, precipitation amounts, wind/gusts/direction, humidity, pressure, visibility, CAPE and WMO codes at 12 fixed coordinates | Numerical model values, not 12 physical stations or live cloud outlines. The existing sample mesh was retained in this session. |
+| Buienradar station JSON | Airport 6344, Hoek van Holland 6330 and Geulhaven 6343 observations | Point observations distributed by Buienradar; they do not automatically correct the map's model grid. |
+| Buienradar raintext | Five-minute point rain predictions for approximately two hours | A point nowcast, separate from the spatial radar display. |
+| RainViewer weather-maps JSON and raster tile host | Latest past rain radar frame | Shows observed precipitation geography; radar does not identify non-raining clouds. |
+| Existing solar-position calculation | Solar azimuth/elevation used for lighting and shadow direction | Astronomical calculation, not a measured cloud height or observed shadow boundary. |
+
+```mermaid
+flowchart LR
+    MODEL[Open-Meteo / KNMI model] --> HARVEST[Weather harvester / scheduler]
+    STATIONS[Buienradar stations] --> HARVEST
+    RAIN[Buienradar point nowcast] --> HARVEST
+    META[RainViewer frame metadata] --> HARVEST
+    HARVEST --> CACHE[Redis snapshots and last-good history]
+    HARVEST --> DB[Station amenities / live events in PostGIS]
+    CACHE --> API[FastAPI :8000]
+    API --> PROXY[Vite :5173 /api and /health proxy]
+    PROXY --> CONTROL[Validated live weather controller]
+    CONTROL --> CARD[Centrum weather card]
+    CONTROL --> GPU[Cloud data texture and volume renderer]
+    CONTROL --> RADAR[Observed rain raster layer]
+    TILES[RainViewer tile host] --> RADAR
+```
+
+The browser polls cached backend snapshots; it does not contact Open-Meteo or Buienradar directly. MapLibre downloads the radar tile images from RainViewer. Backend ingestion cadence, cache TTL, model valid time, and browser refresh interval are separate clocks. Frequent polling does not increase the underlying model's spatial or temporal resolution.
+
+### 12.2 Normalization, Missing Data and Timestamps
+
+* The deterministic synthetic coastal/inland weather generator was removed. Every requested numeric model field must be present and finite, along with a model time and a positive finite accumulation interval. An incomplete grid is rejected as a whole instead of filling missing values with invented weather.
+* Open-Meteo `current` precipitation, rain and showers are interval amounts in mm. The normalized rate is `amount * 3600 / current.interval`. Snowfall uses the same interval conversion in cm/hour. For example, 0.5 mm over 900 seconds becomes 2.0 mm/hour. This is an interval-average rate, not an instantaneous rain-gauge reading.
+* Model timestamps are returned with explicit UTC offsets. Buienradar station/raintext local times are interpreted with `Europe/Amsterdam`, and rain slots gain dated UTC `valid_at` timestamps. Rain arrival uses the timestamp difference rather than the slot index times five.
+* Station measurements older than 30 minutes are excluded from the preferred current overview values. Available model values supply temperature/feels-like when station values are missing. A model-only summary uses a null station ID rather than claiming an airport observation.
+* Overview fallback selection preserves legitimate zero readings, including calm wind, a north direction of 0°, and no precipitation.
+* A failed raintext fetch returns `status=unavailable`, null prediction metrics and an empty timeline if no history exists. With history, it returns the original forecast labelled `stale`; its timestamp is not reset. Consumers must check status before treating historical rain predictions as current.
+* `generated_at` is the time a response was assembled. Each node's `timestamp` is the model valid time; `observed_at` identifies the selected station timestamp and can identify an older observation that was excluded. The HUD uses the oldest node timestamp for its freshness decision and displays it in Rotterdam time.
+
+### 12.3 Scheduler and Redis Cache Contract
+
+| Work / key | Refresh or TTL | Behaviour |
+| :--- | :--- | :--- |
+| Spatial-grid scheduler job | Every 120s | Fetches all 12 model points; a successful update also rebuilds the live overview. |
+| Station scheduler job | Every 10m | Writes station observations to PostGIS and Redis, then rebuilds the live overview. |
+| Rain-nowcast / radar scheduler jobs | Every 5m each | Refresh point predictions and radar metadata independently. |
+| `weather:spatial:grid`, `weather:live:rotterdam` | 120s TTL | Normal model/live snapshots. |
+| `weather:spatial:last_good`, `weather:live:last_good` | 86,400s TTL | Last usable snapshots retained for labelled stale responses; retention is not permission to call them fresh. |
+| `weather:stations:all`, `weather:stations:{id}` | 600s TTL | Station collection and individual station snapshots. |
+| `weather:stations:last_good` | 86,400s TTL | Station history retained if a feed fetch returns no target stations. |
+| `weather:rain:nowcast:{rounded_lat}:{rounded_lon}`, `weather:rain:nowcast:rotterdam` | 300s TTL | Point rain prediction and default Rotterdam alias; requested coordinates are rounded to two decimals. |
+| Point rain key with `:last_good` suffix | 86,400s TTL | Original forecast returned with a stale label on provider failure. |
+| `weather:radar:frames` | 300s TTL | Frame metadata including the latest past frame. |
+
+Grid/live responses expose `data_status` (`fresh` or `stale`) and `source`. Fresh grid generation checks that every model timestamp is no more than 30 minutes old and no more than five minutes in the future. Provider failure returns available history with `data_status=stale`; without usable history, the grid/live routes return HTTP 503 for the handled unavailable-data path. This does not convert every possible database or transport error into the same response.
+
+The existing cache-miss paths still harvest on demand. Request coalescing, background-only cache warming, and a strict latency guarantee during outages remain future work.
+
+### 12.4 Frontend Live State and Radar
+
+The controller begins with an empty node list. It requires exactly 12 unique, known node IDs at the expected coordinates, finite rendering fields and solar angles, parseable timestamps, and an explicit backend status. Legacy responses with no grid are rejected. Valid nodes are sorted by ID before uploading them to the GPU.
+
+| UI state | Meaning | Cloud effects |
+| :--- | :--- | :--- |
+| `unavailable` | No accepted grid has been received | Disabled; no fabricated initial values. |
+| `live` | Accepted grid, no request failure, backend says fresh, oldest model time within the allowed age window | Enabled. |
+| `stale` / displayed as "Outdated" | Failed request, stale backend status, or model timestamp outside the freshness window | Disabled; prior accepted values can remain visible with their original time. |
+
+The UI consistently reads node 7 (Rotterdam Centrum) for temperature, condition, cloud cover, rain, wind speed and direction. It no longer combines a citywide mean temperature/wind with a maximum rain value and an unrelated direction. Top-level API station values remain available for other consumers.
+
+Radar metadata is fetched separately with a 15s timeout. The frontend accepts the expected RainViewer HTTPS tile host, uses 512px raster tiles with maximum source zoom 7, and displays the latest past frame with opacity 0.6. It removes a frame older than 20 minutes or more than five minutes in the future. New frame URLs update the source, and style events retry layer installation safely. There is no future-frame fallback or radar timeline animation. Frame time refers to the provider's composite metadata, not necessarily the exact observation time of every pixel.
+
+All runtime presets, preset exports, `setPreset`, simulator controls and synthetic initial weather have been removed. `?weather=off` remains a developer/test switch for disabling effects; it does not supply alternative weather. Timers/listeners are cleaned up when the map is removed.
+
+### 12.5 Current Cloud Renderer
+
+The final renderer replaces both the old three-slice appearance and the intermediate horizontal cirrus streaks with two sampled 3D density fields:
+
+1. The GPU interpolates the 12 points using inverse-distance weighting. Cloud cover, rain and wind/fog fields are packed into a 16×2 RGBA byte texture; only 12 columns are active.
+2. The lower deck uses `max(low_cover, middle_cover)` at illustrative heights 900–2400m. The upper deck uses high cover at 3000–3650m. These are visual constants, not measured atmospheric cloud-base/top heights, and low/middle clouds are not separate physical volumes.
+3. Each deck samples 16 positions through the cloud depth. A shared 3D value-noise field, regional patches, warped coordinates, vertical taper, and fine erosion form lobes, gaps and ragged boundaries.
+4. Two additional density samples toward the calculated sun approximate self-shadowing. Exponential attenuation and ambient/solar colours produce lit crowns, shaded interiors and translucent edges. This is a real-time lighting approximation, not a full atmospheric scattering simulation.
+5. Samples accumulate colour and transmission front-to-back. The upper deck is composited over the lower deck; approximate camera/altitude projection gives parallax. Low-deck density also produces soft projected ground shadows.
+6. Both decks move using model 10m wind vectors, with m/s converted to km/s. Camera zoom 12–14.2 progressively fades/parts the canopy to keep streets visible. Camera position and cloud projection are approximations, and the density-field speed is not a validated reconstruction of winds aloft.
+7. The reduced-resolution framebuffer is composited over MapLibre with premultiplied alpha. Clouds cross land and water; the island mask is used for ground effects rather than cutting clouds to the municipal outline.
+
+The prior rain streak effect is disabled (`rainStrength=0`); rain geography comes from radar. Random lightning flashes are removed, node `lightning_active` is false, and `lightning_probability` is null rather than presenting a heuristic as an observed/calibrated probability. Fog uses model visibility/WMO fog codes rather than humidity alone, but its geographic mask remains illustrative. Model-derived storm flags remain API metadata; the final cloud shading is solar/ambient and does not retain the earlier advertised multi-regime storm-colour system.
+
+Cloud percentage is a model sky-cover estimate. It is not a target percentage of opaque map pixels. The noise threshold and optical properties are visual approximations; neither exact coverage on screen nor correspondence to real cloud positions has been calibrated.
+
+### 12.6 Defects Found and Fixed in This Session
+
+* Removed production-facing presets and false-live synthetic fallback behaviour in the weather map.
+* Corrected interval precipitation amounts previously labelled as hourly rates.
+* Added source/freshness metadata, retained timestamps on provider failure, and stopped treating failed point-rain fetches as two dry hours.
+* Preserved zero readings and corrected crowd-engine reads to `precipitation.current_mm_h` and `wind.bft`. The crowd engine's older missing-data defaults and lack of a full freshness policy remain; removing map presets did not eliminate every fallback in the wider platform.
+* Added the observed radar layer, its frame-age handling, attribution and style-load retry logic.
+* Replaced the weather pill/simulator drawer with the muted responsive card.
+* Fixed a shader compile failure caused by a leftover `lightningPulse` reference after removing flashes. Layer registration alone had passed the earlier smoke check; the new regression waits for a compiled program and reads the framebuffer to verify actual drawing.
+* Replaced the intermediate flat streak/sheet look with sampled cloud volumes and directional density-based lighting. Visual checks covered top-down and tilted views; perceived realism is not measured forecast accuracy.
+* Routed Vite development API/health requests through the same origin and restarted the local worker to load the ingestion changes.
+* Updated documentation and included the pre-existing screenshot additions/deletions when committing the workspace, as requested. Those screenshot changes were not produced by the weather renderer tests; debug captures were saved under `/tmp`.
+
+### 12.7 Accuracy Assessment and Remaining Work
+
+At approximately 13:33 Rotterdam time during the initial audit, the Centrum model gave 14.2°C, 16.9km/h wind from 238°, and dry conditions. The airport station's 13:20 observation gave 14.0°C, 18km/h from 230°, and no rain. Cloud descriptions differed: the model said mostly clear/20% cover while the airport reported heavy cloud. The positions and valid times differed; this single comparison is not an accuracy score.
+
+No satellite cloud mask, exact observed cloud outlines, regular model-grid expansion, cloud-height/wind-profile ingestion, station bias correction, direct KNMI spatial radar integration, or multi-week forecast verification was implemented. Those remain candidate improvements. A future evaluation should match locations/times, preserve forecast lead times, measure temperature/wind errors and rain detection/timing, and compare against independent observations. The current system is a better-labelled model-driven visualization with an observed rain layer, not a measured digital reconstruction of Rotterdam's sky.

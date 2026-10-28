@@ -43,8 +43,14 @@ async def get_live_weather() -> LiveWeatherOverview:
         return LiveWeatherOverview.model_validate(cached)
 
     # Cold-start or upgraded schema fallback: execute spatial grid & station harvest on demand
-    await _harvester.fetch_spatial_weather_grid(sync_live_overview=False)
-    await _harvester.fetch_weather_stations()
+    try:
+        await _harvester.fetch_spatial_weather_grid(sync_live_overview=False)
+        await _harvester.fetch_weather_stations()
+    except (ValueError, TypeError):
+        previous = await get_cached_json("weather:live:last_good")
+        if previous:
+            return LiveWeatherOverview.model_validate({**previous, "data_status": "stale"})
+        raise HTTPException(status_code=503, detail="Weather telemetry temporarily unavailable")
     overview = await get_cached_json(cache_key)
     if overview:
         return LiveWeatherOverview.model_validate(overview)
@@ -73,7 +79,10 @@ async def get_spatial_weather_grid() -> SpatialWeatherGridResponse:
     if cached and len(cached.get("features", [])) == 12:
         return SpatialWeatherGridResponse.model_validate(cached)
 
-    grid_data = await _harvester.fetch_spatial_weather_grid()
+    try:
+        grid_data = await _harvester.fetch_spatial_weather_grid()
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=503, detail="Weather telemetry temporarily unavailable")
     return SpatialWeatherGridResponse.model_validate(grid_data)
 
 

@@ -1,20 +1,17 @@
 /**
- * 60FPS WebGL2 / GLSL Hyper-Realistic Volumetric Weather Engine for Rotterdam Island
+ * Live-source weather controller and MapLibre cloud/radar rendering for Rotterdam.
  *
- * Features:
- * 1. 12-Node Rotterdam Spatial Weather Grid packed into a GPU data texture + uniform array
- *    with smooth Inverse Distance Weighting (IDW) across neighborhoods (Maasvlakte -> Nesselande).
- * 2. Multi-layered volumetric clouds (Low Cumulus/Stratocumulus, Mid Altostratus/Nimbostratus,
- *    High Cirrus) using domain-warped Fractional Brownian Motion (FBM) + Worley cellular billow noise.
- * 3. Dynamic storm coloring:
- *    - Dry Cumulus & Cirrus (#F8FAFC -> #CBD5E1) with Beer-Lambert absorption & Henyey-Greenstein silver lining
- *    - Rain-Bearing Nimbostratus (#475569 -> #1E293B) over active precipitation cells
- *    - Severe Storm & Thunder Anvils (#111827 -> #090D16) with procedural in-cloud sheet lightning pulses
- * 4. Projected 3D ground cloud shadows offset by live Rotterdam solar azimuth & elevation vector:
- *    (dx, dy) = H_cloud * cot(theta_sun) * (sin(phi_sun), cos(phi_sun)).
- * 5. Real-time wind advection, 3D slanted GPU rain streaks, street-level wet surface specular shimmer
- *    (zoom > 13.5), and coastal/river advection fog along the Nieuwe Maas & Maasvlakte basins.
- * 6. Altitude zoom-fade ("Dive Through the Clouds" camera parting & smoothstep(14.2, 12.0, zoom)).
+ * The validated 12-node model grid is interpolated from a GPU data texture.
+ * Two continuous 3D density fields use 16 depth samples each, solar self-shadow
+ * probes, transmission, and premultiplied-alpha compositing. Low/middle cover
+ * share a lower visual deck; high cover drives an upper deck. Heights and camera
+ * projection are illustrative. Model 10m wind drives drift; zoom fades the canopy.
+ *
+ * Observed rain is a separate RainViewer raster layer with frame-age checks.
+ * No runtime weather presets, synthetic initial weather, or random lightning.
+ * Model effects require fresh accepted data. Reduced-resolution rendering and
+ * a 33ms idle repaint timer limit cost; frame rate depends on the device.
+ * See rotterdam_live_api_architecture.txt for contracts and known limitations.
  */
 
 import { ORIGIN, WORLD_ORIGIN, METERS_PER_WORLD, mercator, localPoint, localMatrix } from './oceanGeometry.js';
@@ -30,7 +27,7 @@ const ISLAND_DISTANCE_BOUNDS = [
 const ISLAND_MAX_DISTANCE = 3200;
 const distanceUrl = new URL('./ocean-distance.png', import.meta.url).href;
 
-const DEFAULT_API_BASE = typeof window !== 'undefined'
+const DEFAULT_API_BASE = import.meta.env?.DEV ? '' : typeof window !== 'undefined'
   ? (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
       ? 'http://localhost:8000'
       : '')
@@ -60,268 +57,6 @@ export const ROTTERDAM_WEATHER_NODES = [
 ];
 
 /**
- * Interactive Weather Simulator Presets for testing and verifying all visual regimes
- */
-export const WEATHER_SIMULATOR_PRESETS = {
-  live: {
-    id: 'live',
-    label: 'Live Now',
-    subtitle: 'Live KNMI HARMONIE 2km Grid',
-    isLive: true
-  },
-  scattered_cumulus: {
-    id: 'scattered_cumulus',
-    label: 'Scattered Cumulus',
-    subtitle: 'Fair-weather billows & crisp ground shadows',
-    isLive: false,
-    solar: {
-      azimuth_deg: 196.0,
-      elevation_deg: 43.0,
-      is_day: 1,
-      daylight_phase: 'day',
-      shadow_offset_factor: [0.296, 1.03]
-    },
-    buildNodes: () =>
-      ROTTERDAM_WEATHER_NODES.map((n, i) => {
-        const coastal = Math.max(0, 1 - (n.lon - 3.985) / 0.59);
-        const speedKmh = 18.0 + coastal * 6.0;
-        const speedMs = speedKmh / 3.6;
-        const dirDeg = 245;
-        const rad = (dirDeg * Math.PI) / 180;
-        return {
-          ...n,
-          cloud_cover: 36 + (i % 3) * 6,
-          cloud_cover_low: 34 + coastal * 10,
-          cloud_cover_mid: 18,
-          cloud_cover_high: 14,
-          precipitation: 0.0,
-          rain: 0.0,
-          showers: 0.0,
-          snowfall: 0.0,
-          weather_code: 1,
-          weather_description: 'Licht bewolkt',
-          wind_speed_10m: Number(speedKmh.toFixed(1)),
-          wind_speed_ms: Number(speedMs.toFixed(2)),
-          wind_direction_10m: dirDeg,
-          wind_gusts_10m: Number((speedKmh * 1.3).toFixed(1)),
-          wind_u: Number((-speedMs * Math.sin(rad)).toFixed(3)),
-          wind_v: Number((-speedMs * Math.cos(rad)).toFixed(3)),
-          temperature_2m: Number((18.5 - coastal * 1.8).toFixed(1)),
-          relative_humidity_2m: 64,
-          visibility: 38000,
-          surface_pressure: 1022.4,
-          cape: 40,
-          is_day: 1,
-          storm_intensity: 0.0,
-          fog_density: 0.0,
-          lightning_active: false
-        };
-      })
-  },
-  coastal_squall: {
-    id: 'coastal_squall',
-    label: 'Maasvlakte Coastal Squall',
-    subtitle: 'Fierce North Sea squall in west, dry inland east',
-    isLive: false,
-    solar: {
-      azimuth_deg: 215.0,
-      elevation_deg: 26.0,
-      is_day: 1,
-      daylight_phase: 'day',
-      shadow_offset_factor: [1.17, 1.68]
-    },
-    buildNodes: () =>
-      ROTTERDAM_WEATHER_NODES.map((n) => {
-        // Strong coastal squall on nodes 1..5 (west of 4.42E), clearing toward Nesselande
-        const westFactor = Math.max(0, Math.min(1, (4.46 - n.lon) / 0.42));
-        const precip = Number((westFactor * westFactor * 6.4).toFixed(2));
-        const speedKmh = 24.0 + westFactor * 36.0;
-        const gustsKmh = speedKmh * (1.35 + westFactor * 0.25);
-        const speedMs = speedKmh / 3.6;
-        const dirDeg = Math.round(255 - westFactor * 18);
-        const rad = (dirDeg * Math.PI) / 180;
-        return {
-          ...n,
-          cloud_cover: Math.round(32 + westFactor * 68),
-          cloud_cover_low: Math.round(25 + westFactor * 73),
-          cloud_cover_mid: Math.round(20 + westFactor * 70),
-          cloud_cover_high: Math.round(30 + westFactor * 50),
-          precipitation: precip,
-          rain: precip,
-          showers: Number((precip * 0.5).toFixed(2)),
-          snowfall: 0.0,
-          weather_code: precip > 4.0 ? 82 : (precip > 0.3 ? 61 : 2),
-          weather_description: precip > 4.0 ? 'Zware kustbui' : (precip > 0.3 ? 'Lichte regen' : 'Half bewolkt'),
-          wind_speed_10m: Number(speedKmh.toFixed(1)),
-          wind_speed_ms: Number(speedMs.toFixed(2)),
-          wind_direction_10m: dirDeg,
-          wind_gusts_10m: Number(gustsKmh.toFixed(1)),
-          wind_u: Number((-speedMs * Math.sin(rad)).toFixed(3)),
-          wind_v: Number((-speedMs * Math.cos(rad)).toFixed(3)),
-          temperature_2m: Number((16.8 - westFactor * 3.6).toFixed(1)),
-          relative_humidity_2m: Math.round(72 + westFactor * 24),
-          visibility: Math.round(28000 - westFactor * 24500),
-          surface_pressure: Number((1009.5 - westFactor * 4.5).toFixed(1)),
-          cape: Math.round(80 + westFactor * 780),
-          is_day: 1,
-          storm_intensity: Number((westFactor * 0.85).toFixed(3)),
-          fog_density: Number((westFactor * 0.35).toFixed(3)),
-          lightning_active: westFactor > 0.72
-        };
-      })
-  },
-  heavy_rain: {
-    id: 'heavy_rain',
-    label: 'Heavy Rain Front',
-    subtitle: 'Slate-blue Nimbostratus deck & slanted rain shafts',
-    isLive: false,
-    solar: {
-      azimuth_deg: 205.0,
-      elevation_deg: 22.0,
-      is_day: 1,
-      daylight_phase: 'day',
-      shadow_offset_factor: [1.04, 2.24]
-    },
-    buildNodes: () =>
-      ROTTERDAM_WEATHER_NODES.map((n, i) => {
-        const precip = Number((2.4 + Math.sin(i * 0.7) * 1.1).toFixed(2));
-        const speedKmh = 36.0 + (i % 4) * 2.5;
-        const speedMs = speedKmh / 3.6;
-        const dirDeg = 228;
-        const rad = (dirDeg * Math.PI) / 180;
-        return {
-          ...n,
-          cloud_cover: 96,
-          cloud_cover_low: 92,
-          cloud_cover_mid: 94,
-          cloud_cover_high: 65,
-          precipitation: precip,
-          rain: precip,
-          showers: 0.4,
-          snowfall: 0.0,
-          weather_code: 63,
-          weather_description: 'Matige tot zware regen',
-          wind_speed_10m: Number(speedKmh.toFixed(1)),
-          wind_speed_ms: Number(speedMs.toFixed(2)),
-          wind_direction_10m: dirDeg,
-          wind_gusts_10m: Number((speedKmh * 1.45).toFixed(1)),
-          wind_u: Number((-speedMs * Math.sin(rad)).toFixed(3)),
-          wind_v: Number((-speedMs * Math.cos(rad)).toFixed(3)),
-          temperature_2m: 13.4,
-          relative_humidity_2m: 93,
-          visibility: 4200,
-          surface_pressure: 1004.2,
-          cape: 220,
-          is_day: 1,
-          storm_intensity: 0.48,
-          fog_density: 0.28,
-          lightning_active: false
-        };
-      })
-  },
-  night_thunderstorm: {
-    id: 'night_thunderstorm',
-    label: 'Severe Night Thunderstorm',
-    subtitle: 'Obsidian storm anvils & in-cloud sheet lightning',
-    isLive: false,
-    solar: {
-      azimuth_deg: 340.0,
-      elevation_deg: -18.0,
-      is_day: 0,
-      daylight_phase: 'night',
-      shadow_offset_factor: [0.65, -1.8]
-    },
-    buildNodes: () =>
-      ROTTERDAM_WEATHER_NODES.map((n, i) => {
-        const cellBoost = Math.exp(-Math.pow((n.lon - 4.44) / 0.22, 2));
-        const precip = Number((5.2 + cellBoost * 5.8).toFixed(2));
-        const speedKmh = 54.0 + cellBoost * 22.0;
-        const gustsKmh = 78.0 + cellBoost * 24.0;
-        const speedMs = speedKmh / 3.6;
-        const dirDeg = 240 + (i % 3) * 5;
-        const rad = (dirDeg * Math.PI) / 180;
-        return {
-          ...n,
-          cloud_cover: 100,
-          cloud_cover_low: 98,
-          cloud_cover_mid: 98,
-          cloud_cover_high: 94,
-          precipitation: precip,
-          rain: precip * 0.7,
-          showers: precip * 0.3,
-          snowfall: 0.0,
-          weather_code: 99,
-          weather_description: 'Zwaar onweer met windstoten',
-          wind_speed_10m: Number(speedKmh.toFixed(1)),
-          wind_speed_ms: Number(speedMs.toFixed(2)),
-          wind_direction_10m: dirDeg,
-          wind_gusts_10m: Number(gustsKmh.toFixed(1)),
-          wind_u: Number((-speedMs * Math.sin(rad)).toFixed(3)),
-          wind_v: Number((-speedMs * Math.cos(rad)).toFixed(3)),
-          temperature_2m: 14.2,
-          relative_humidity_2m: 96,
-          visibility: 2100,
-          surface_pressure: 994.8,
-          cape: Math.round(1350 + cellBoost * 650),
-          is_day: 0,
-          storm_intensity: Number(Math.min(1.0, 0.82 + cellBoost * 0.18).toFixed(3)),
-          fog_density: 0.42,
-          lightning_active: true
-        };
-      })
-  },
-  harbor_fog: {
-    id: 'harbor_fog',
-    label: 'Dense Harbor Fog',
-    subtitle: 'Nieuwe Maas & Maasvlakte golden-hour advection mist',
-    isLive: false,
-    solar: {
-      azimuth_deg: 118.0,
-      elevation_deg: 6.5,
-      is_day: 1,
-      daylight_phase: 'golden_hour',
-      shadow_offset_factor: [-3.1, 1.65]
-    },
-    buildNodes: () =>
-      ROTTERDAM_WEATHER_NODES.map((n) => {
-        const isWaterCorridor = n.zone === 'coastal' || n.zone === 'harbor' || n.zone === 'river';
-        const speedKmh = isWaterCorridor ? 9.5 : 6.5;
-        const speedMs = speedKmh / 3.6;
-        const dirDeg = 105;
-        const rad = (dirDeg * Math.PI) / 180;
-        return {
-          ...n,
-          cloud_cover: isWaterCorridor ? 68 : 42,
-          cloud_cover_low: isWaterCorridor ? 78 : 45,
-          cloud_cover_mid: 15,
-          cloud_cover_high: 22,
-          precipitation: 0.0,
-          rain: 0.0,
-          showers: 0.0,
-          snowfall: 0.0,
-          weather_code: 45,
-          weather_description: 'Dichte haven- en riviermist',
-          wind_speed_10m: speedKmh,
-          wind_speed_ms: Number(speedMs.toFixed(2)),
-          wind_direction_10m: dirDeg,
-          wind_gusts_10m: Number((speedKmh * 1.2).toFixed(1)),
-          wind_u: Number((-speedMs * Math.sin(rad)).toFixed(3)),
-          wind_v: Number((-speedMs * Math.cos(rad)).toFixed(3)),
-          temperature_2m: 9.8,
-          relative_humidity_2m: isWaterCorridor ? 99 : 94,
-          visibility: isWaterCorridor ? 450 : 1400,
-          surface_pressure: 1024.0,
-          cape: 0,
-          is_day: 1,
-          storm_intensity: 0.0,
-          fog_density: isWaterCorridor ? 0.96 : 0.68,
-          lightning_active: false
-        };
-      })
-  }
-};
-
-/**
  * Compute smooth Inverse Distance Weighted (IDW) weather metrics at any (lng, lat)
  * across the 12-node Rotterdam Island weather grid.
  *
@@ -331,7 +66,8 @@ export const WEATHER_SIMULATOR_PRESETS = {
  * @returns {Object} Interpolated meteorological metrics at (lng, lat)
  */
 export function interpolateWeatherAtPoint(lng, lat, nodes = []) {
-  const activeNodes = nodes?.length ? nodes : WEATHER_SIMULATOR_PRESETS.scattered_cumulus.buildNodes();
+  if (!nodes?.length) return null;
+  const activeNodes = nodes;
   const cosLat = Math.cos((51.92 * Math.PI) / 180);
 
   let weightSum = 0;
@@ -566,67 +302,70 @@ const FRAGMENT_SHADER_SOURCE = `
     return val;
   }
 
-  // Shared low-frequency organic domain warp (computed ONCE per pixel and reused by
-  // every altitude slice — the warp field is smooth so per-slice recomputation is wasted).
-  vec2 cloudDomainWarp(vec2 posKm, vec2 windAdvectKm) {
-    vec2 p = posKm * 0.26 + windAdvectKm;
-    return vec2(
-      fbm3(p * 0.75 + vec2(1.7, 9.2)),
-      fbm3(p * 0.75 + vec2(8.3, 2.8))
-    ) - 0.5;
+  // A continuous 3D density field. Volume samples share the same world-space
+  // field so camera movement reveals the sides of the cloud, not stacked sprites.
+  float hash31(vec3 p) {
+    p = fract(p * 0.1031);
+    p += dot(p, p.yzx + 33.33);
+    return fract((p.x + p.y) * p.z);
   }
 
-  // Macro weather fronts & meso cloud clusters -> soft cloud envelope [0..1]
-  float cloudEnvelope(vec2 wPos, vec2 warp, float coverage, float heightFrac) {
-    float macroSystem = fbm4(wPos * 0.52 + vec2(3.1, 7.4));
-    float mesoCluster = fbm4(wPos * 1.25 - warp * 0.45);
-    float baseShape = macroSystem * 0.58 + mesoCluster * 0.42;
-    float cov = clamp(coverage, 0.0, 1.0);
-    float coverageThreshold = mix(0.66, 0.34, pow(cov, 0.85));
-    // Higher slices taper inward to form 3D rounded cumulus domes & towering tops
-    float verticalTaper = heightFrac * (1.0 - cov * 0.35) * 0.13;
-    return smoothstep(coverageThreshold + verticalTaper, coverageThreshold + verticalTaper + 0.26, baseShape);
+  float noise3(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(mix(hash31(i), hash31(i + vec3(1,0,0)), f.x),
+          mix(hash31(i + vec3(0,1,0)), hash31(i + vec3(1,1,0)), f.x), f.y),
+      mix(mix(hash31(i + vec3(0,0,1)), hash31(i + vec3(1,0,1)), f.x),
+          mix(hash31(i + vec3(0,1,1)), hash31(i + vec3(1,1,1)), f.x), f.y), f.z);
   }
 
-  // Sculpted Cumulus & Nimbostratus Density Slice with Worley Cauliflower Edge Erosion
-  // Returns density in [0..1] for a given horizontal world position (in km) and vertical slice fraction [0..1]
-  float evaluateVolumetricCloudSlice(vec2 posKm, vec2 windAdvectKm, vec2 warp, float coverage, float heightFrac) {
-    if (coverage <= 0.015) return 0.0;
-    vec2 wPos = posKm * 0.26 + windAdvectKm + warp * 0.85;
-    float rawEnvelope = cloudEnvelope(wPos, warp, coverage, heightFrac);
-    // Early-out in clear sky: skips the expensive Worley billow evaluation entirely
-    if (rawEnvelope <= 0.001) return 0.0;
-
-    // Multi-octave Worley cellular cauliflower billows carved into the cloud body & perimeter
-    float billowCoarse = worleyBillow(wPos * 2.15 + vec2(heightFrac * 0.35, -heightFrac * 0.25));
-    float billowFine = worleyBillow(wPos * 4.70 - vec2(heightFrac * 0.50, heightFrac * 0.40));
-    float cauliflower = billowCoarse * 0.64 + billowFine * 0.36;
-    float sculpted = rawEnvelope * (0.58 + 0.42 * cauliflower) - (1.0 - cauliflower) * 0.22 * (1.0 - rawEnvelope);
-    return clamp(smoothstep(0.08, 0.78, sculpted), 0.0, 1.0);
+  float cloudVolume(vec3 p, float coverage, float highDeck) {
+    if (coverage < 0.02 || p.z < 0.0 || p.z > 1.0) return 0.0;
+    vec2 warp = vec2(valueNoise(p.xy * 0.35), valueNoise(p.xy * 0.35 + 19.7)) - 0.5;
+    vec3 q = vec3(p.xy + warp * 1.3, p.z * 2.1);
+    // Large weather patches contain smaller rounded lobes and ragged edges.
+    float regional = fbm3(q.xy * 0.33 + vec2(7.2, 3.8));
+    float shape = noise3(q * 1.5) * 0.57
+                + noise3(q * 3.1 + 17.0) * 0.28
+                + noise3(q * 6.4 + 31.0) * 0.15;
+    float height = smoothstep(0.0, 0.18, p.z) * (1.0 - smoothstep(0.58, 1.0, p.z));
+    float threshold = mix(0.78, 0.34, coverage);
+    float body = shape * 0.68 + regional * 0.32 - threshold;
+    float erosion = noise3(q * 13.0 + 8.0) * 0.055 + noise3(q * 26.0) * 0.025;
+    return pow(max(0.0, body - erosion) * 5.0, 1.25) * height;
   }
 
-  // Cheap envelope-only sample (no Worley) for soft ground shadows & sun-ward self-shadowing
-  float evaluateCloudEnvelopeFast(vec2 posKm, vec2 windAdvectKm, vec2 warp, float coverage, float heightFrac) {
-    if (coverage <= 0.015) return 0.0;
-    vec2 wPos = posKm * 0.26 + windAdvectKm + warp * 0.85;
-    return smoothstep(0.08, 0.78, cloudEnvelope(wPos, warp, coverage, heightFrac) * 0.79);
-  }
+  vec2 projectToAltitudeMeters(vec2 groundMeters, float H_meters);
 
-  // High-altitude sheared ice-crystal Cirrus streaks (H ~ 3100m)
-  float evaluateCirrusDeck(vec2 posKm, vec2 windAdvectKm, float coverage) {
-    if (coverage <= 0.02) return 0.0;
-    vec2 p = posKm * vec2(0.18, 0.34) + windAdvectKm * 1.45 + vec2(14.2, 6.8);
-    float warp = fbm3(p * 0.8);
-    float streak = fbm4(vec2(p.x * 1.8 + warp * 1.4, p.y * 0.65 - warp * 0.6));
-    float thresh = mix(0.68, 0.42, clamp(coverage, 0.0, 1.0));
-    return smoothstep(thresh, thresh + 0.28, streak) * 0.48;
-  }
-
-  // Henyey-Greenstein phase function for silver-lining forward scattering
-  float henyeyGreenstein(float cosTheta, float g) {
-    float g2 = g * g;
-    float denom = max(0.001, pow(1.0 + g2 - 2.0 * g * cosTheta, 1.5));
-    return (1.0 - g2) / (4.0 * 3.14159265 * denom);
+  vec4 marchCloudDeck(vec2 groundMeters, vec2 driftKm, float coverage,
+                     float baseHeight, float thickness, float highDeck) {
+    vec3 accumulated = vec3(0.0);
+    float transmission = 1.0;
+    vec3 sunlight = normalize(vec3(u_sun_dir.x, -u_sun_dir.y, max(0.15, u_sun_dir.z)));
+    float night = 1.0 - smoothstep(-6.0, 3.0, u_sun_elevation_deg);
+    vec3 sunColor = mix(vec3(1.0, 0.985, 0.955), vec3(0.32, 0.38, 0.48), night);
+    vec3 ambient = mix(vec3(0.67, 0.71, 0.77), vec3(0.16, 0.20, 0.28), night);
+    for (int stepIndex = 0; stepIndex < 16; stepIndex++) {
+      float z = 1.0 - (float(stepIndex) + 0.5) / 16.0;
+      vec2 xy = projectToAltitudeMeters(groundMeters, baseHeight + z * thickness) * 0.001;
+      vec3 p = vec3(xy * 1.10 + driftKm * 1.10 + vec2(highDeck * 23.1), z);
+      float density = cloudVolume(p, coverage, highDeck);
+      if (density > 0.002 && transmission > 0.015) {
+        // Trace toward the sun through this same volume. This gives each lobe
+        // a lit crown, shaded flank, and translucent edge without painted rims.
+        float shadow = cloudVolume(p + sunlight * 0.16, coverage, highDeck) * 0.65
+                     + cloudVolume(p + sunlight * 0.38, coverage, highDeck) * 0.35;
+        float direct = exp(-shadow * 2.2);
+        float powder = 1.0 - exp(-density * 2.0);
+        vec3 light = mix(ambient, sunColor, direct * 0.82 + powder * 0.12);
+        float alpha = 1.0 - exp(-density * mix(0.90, 0.72, highDeck));
+        accumulated += transmission * alpha * light;
+        transmission *= 1.0 - alpha;
+      }
+    }
+    return vec4(accumulated, 1.0 - transmission);
   }
 
   // Sample Rotterdam Island signed/exterior distance field (0m on island land, up to 3200m in ocean)
@@ -711,129 +450,30 @@ const FRAGMENT_SHADER_SOURCE = `
     // In localMeters: +x is East, +y is South (so Northward wind v > 0 moves toward -y).
     // Natural real-time wind advection: clouds glide smoothly and gently across Rotterdam
     // along the live KNMI wind vector at a believable, real-life pace.
-    vec2 windAdvectKm = vec2(-windMs.x, windMs.y) * (u_time * 0.005);
+    vec2 windAdvectKm = vec2(-windMs.x, windMs.y) * (u_time * 0.00026);
 
     // 3. Phase 4 Altitude Zoom-Fade ("Dive Through the Clouds" Mechanics)
-    float baseAltitudeAlpha = smoothstep(14.2, 12.0, u_zoom);
+    float baseAltitudeAlpha = (1.0 - smoothstep(12.0, 14.2, u_zoom));
     float radialDist = length(vec2(ndc.x * u_aspect, ndc.y));
     float descentProgress = smoothstep(11.9, 14.2, u_zoom);
     float radialParting = 1.0 - descentProgress * (1.0 - smoothstep(0.0, 1.05, radialDist)) * 0.68;
     float canopyZoomAlpha = max(0.025, baseAltitudeAlpha * radialParting * 0.92 + 0.025 * (1.0 - baseAltitudeAlpha));
 
-    // 4. 3-Slice 3D Volumetric Raymarch Through Cloud Altitudes (1000m -> 2050m) + High Cirrus (3100m)
-    float effectiveCumulusCov = clamp(max(covLow, covMid * 0.85), 0.0, 1.0);
-
-    vec2 pSlice0Km = projectToAltitudeMeters(groundMeters, 1000.0) * 0.001;
-    vec2 pSlice1Km = projectToAltitudeMeters(groundMeters, 1500.0) * 0.001;
-    vec2 pSlice2Km = projectToAltitudeMeters(groundMeters, 2050.0) * 0.001;
-    vec2 pCirrusKm = projectToAltitudeMeters(groundMeters, 3100.0) * 0.001;
-
-    // One shared domain warp per pixel (smooth field -> reused across all slices)
-    vec2 sharedWarp = cloudDomainWarp(pSlice1Km, windAdvectKm);
-
-    float d0 = evaluateVolumetricCloudSlice(pSlice0Km, windAdvectKm, sharedWarp, effectiveCumulusCov, 0.15);
-    float d1 = evaluateVolumetricCloudSlice(pSlice1Km, windAdvectKm * 1.08, sharedWarp, effectiveCumulusCov, 0.58);
-    float d2 = evaluateVolumetricCloudSlice(pSlice2Km, windAdvectKm * 1.16, sharedWarp, effectiveCumulusCov, 1.00);
-    float dCirrus = evaluateCirrusDeck(pCirrusKm, windAdvectKm, covHigh);
-
-    // Combine 3D slices into volumetric optical depth and weighted vertical height [0..1]
-    float totalCloudDensity = clamp(1.0 - (1.0 - d0 * 0.55) * (1.0 - d1 * 0.68) * (1.0 - d2 * 0.55), 0.0, 1.0);
-    totalCloudDensity = clamp(totalCloudDensity + dCirrus * (1.0 - totalCloudDensity * 0.7), 0.0, 1.0);
-
-    float weightedHeight = clamp(
-      (d0 * 0.15 + d1 * 0.58 + d2 * 1.02 + dCirrus * 0.95) /
-      max(0.001, d0 + d1 + d2 + dCirrus),
-      0.0,
-      1.0
-    );
-
-    // 5. Projected 3D Ground Cloud Shadows on Rotterdam Island & Surrounding Coastal Waters
-    // Trace from ground point (Z = 0m) toward the sun to the cloud base altitude (H = 1250m)
-    vec2 shadowSampleKm = (groundMeters + u_shadow_offset_meters) * 0.001;
-    vec2 shadowWarp = cloudDomainWarp(shadowSampleKm, windAdvectKm);
-    float shadowCloud = evaluateCloudEnvelopeFast(shadowSampleKm, windAdvectKm * 1.04, shadowWarp, effectiveCumulusCov, 0.32);
-    float daylightShadowFactor = smoothstep(-2.0, 10.0, u_sun_elevation_deg);
-    float zoomShadowMod = 0.28 + 0.72 * smoothstep(16.5, 11.6, u_zoom);
-    // Cast crisp 3D shadows on Rotterdam Island land and slightly softer shadows on the ocean water
-    float surfaceShadowReceptivity = mix(0.58, 1.0, onIsland);
-    float groundShadowAlpha = shadowCloud * daylightShadowFactor * zoomShadowMod * surfaceShadowReceptivity * 0.50;
-
-    // 6. Directional 3D Self-Shadowing, Beer-Lambert Absorption & Henyey-Greenstein Silver Lining
-    // Step 450m horizontally toward the sun in localMeters (+x = East, -y = North)
-    vec2 sunHorizDirKm = normalize(vec2(u_sun_dir.x, -u_sun_dir.y) + vec2(0.0001)) * 0.55;
-    float densityTowardSun = evaluateCloudEnvelopeFast(
-      pSlice2Km + sunHorizDirKm,
-      windAdvectKm * 1.10,
-      sharedWarp,
-      effectiveCumulusCov,
-      0.65
-    );
-
-    float rainDarkening = clamp(precipMmH * 0.16 + stormIntensity * 0.75, 0.0, 1.4);
-    float opticalDepthTowardSun = densityTowardSun * (1.35 + rainDarkening) + (1.0 - weightedHeight) * 0.85;
-    float beerLambert = exp(-opticalDepthTowardSun);
-
-    vec3 viewDir = normalize(vec3(ndc.x * 0.45, ndc.y * 0.45, 1.0));
-    float cosAngle = clamp(dot(viewDir, normalize(u_sun_dir)), -1.0, 1.0);
-    float hgPhase = henyeyGreenstein(cosAngle, 0.65);
-
-    // Bright rim scattering on wispy cumulus edges and sunlit tops
-    float edgeTranslucency = totalCloudDensity * (1.0 - totalCloudDensity * 0.68) * 2.4;
-    float silverLining = clamp(beerLambert * (0.45 + hgPhase * 1.6) + edgeTranslucency * 0.42 + weightedHeight * 0.35, 0.0, 1.0);
-
-    // Regime 1: Dry Cumulus & Cirrus (#FFFFFF / #F8FAFC sunlit tops -> #CBD5E1 / #94A3B8 shadowed bases)
-    vec3 dryLitColor = vec3(0.985, 0.992, 1.000);   // Crisp sunlit cumulus white
-    vec3 dryBaseColor = vec3(0.710, 0.765, 0.835);  // Sculpted silver-slate cumulus underside
-
-    // Regime 2: Rain-Bearing Nimbostratus (0.1 < precip < 4.0 mm/h: #64748B -> #1E293B)
-    vec3 rainLitColor = vec3(0.380, 0.445, 0.535);
-    vec3 rainBaseColor = vec3(0.118, 0.161, 0.231);
-
-    // Regime 3: Severe Storm & Thunder Cells (precip >= 4.0 or WMO storm: #1E293B -> #090D16)
-    vec3 stormLitColor = vec3(0.145, 0.190, 0.265);
-    vec3 stormBaseColor = vec3(0.035, 0.051, 0.086);
-
-    float rainBlend = smoothstep(0.10, 2.5, precipMmH);
-    float stormBlend = clamp(max(smoothstep(3.5, 6.5, precipMmH), smoothstep(0.45, 0.85, stormIntensity)), 0.0, 1.0);
-
-    vec3 cloudLit = mix(mix(dryLitColor, rainLitColor, rainBlend), stormLitColor, stormBlend);
-    vec3 cloudDark = mix(mix(dryBaseColor, rainBaseColor, rainBlend), stormBaseColor, stormBlend);
-
-    // Time-of-Day / Solar Elevation Lighting Tint
-    float goldenHourFactor = smoothstep(-2.0, 5.0, u_sun_elevation_deg) * (1.0 - smoothstep(6.0, 15.0, u_sun_elevation_deg));
+    // Independent volumetric decks use the reported low/middle/high cover.
+    vec2 physicalDriftKm = vec2(-windMs.x, windMs.y) * u_time * 0.001;
+    float lowerCoverage = max(covLow, covMid);
+    vec4 lowerCloud = marchCloudDeck(groundMeters, physicalDriftKm, lowerCoverage, 900.0, 1500.0, 0.0);
+    vec4 upperCloud = marchCloudDeck(groundMeters, physicalDriftKm, covHigh, 3000.0, 650.0, 1.0);
+    vec4 cloud = upperCloud + lowerCloud * (1.0 - upperCloud.a);
+    float totalCloudDensity = cloud.a;
+    vec3 cloudColor = cloud.rgb / max(0.001, cloud.a);
     float nightFactor = 1.0 - smoothstep(-8.0, 2.0, u_sun_elevation_deg);
+    // Ground shadows remain broad and soft, anchored to the lower deck.
+    vec2 shadowKm = (groundMeters + u_shadow_offset_meters) * 0.001;
+    float shadowCloud = cloudVolume(vec3(shadowKm * 1.10 + physicalDriftKm * 1.10, 0.4), lowerCoverage, 0.0);
+    float groundShadowAlpha = (1.0 - exp(-shadowCloud * 1.2)) * 0.25 * smoothstep(-2.0, 10.0, u_sun_elevation_deg);
 
-    vec3 goldenTint = vec3(1.0, 0.78, 0.55);
-    vec3 nightMoonTint = vec3(0.45, 0.54, 0.70);
-
-    cloudLit = mix(cloudLit, cloudLit * goldenTint, goldenHourFactor * 0.65);
-    cloudLit = mix(cloudLit, cloudLit * nightMoonTint, nightFactor * 0.70);
-    cloudDark = mix(cloudDark, cloudDark * vec3(0.48, 0.54, 0.68), nightFactor * 0.68);
-
-    float lightMix = clamp(beerLambert * 0.62 + silverLining * 0.48, 0.0, 1.0);
-    vec3 cloudColor = mix(cloudDark, cloudLit, lightMix);
-
-    // 7. Procedural In-Cloud Sheet Lightning (active in storm / thunder cells)
-    float lightningPulse = 0.0;
-    if (stormIntensity > 0.55) {
-      float flashCycle = floor(u_time * 0.85 + u_lightning_seed);
-      float cellPhase = fract(u_time * 0.85 + u_lightning_seed);
-      vec2 flashCenterKm = vec2(
-        -18.0 + hash21(vec2(flashCycle, 1.7)) * 28.0,
-        -6.0 + hash21(vec2(flashCycle, 9.3)) * 12.0
-      );
-      float distToBoltKm = length(pSlice1Km - flashCenterKm);
-      float spatialEnvelope = exp(-distToBoltKm * distToBoltKm / 42.0);
-
-      // Realistic double-pulse exponential decay flash
-      float pulse1 = exp(-cellPhase * 22.0) * step(0.02, cellPhase);
-      float pulse2 = exp(-max(0.0, cellPhase - 0.14) * 28.0) * step(0.14, cellPhase) * 0.75;
-      float triggerMask = step(0.32, hash21(vec2(flashCycle, 4.2)));
-      lightningPulse = (pulse1 + pulse2) * spatialEnvelope * triggerMask * smoothstep(0.55, 0.85, stormIntensity);
-
-      vec3 lightningColor = vec3(0.84, 0.90, 1.0);
-      cloudColor = mix(cloudColor, lightningColor, clamp(lightningPulse * totalCloudDensity * 0.92, 0.0, 0.95));
-    }
+    float goldenHourFactor = smoothstep(-2.0, 5.0, u_sun_elevation_deg) * (1.0 - smoothstep(6.0, 15.0, u_sun_elevation_deg));
 
     // 8. Coastal & Nieuwe Maas River Advection Fog
     vec2 groundKm = groundMeters * 0.001;
@@ -846,13 +486,13 @@ const FRAGMENT_SHADER_SOURCE = `
     float fogAlpha = 0.0;
     if (fogDensity > 0.01) {
       float fogNoise = fbm4(groundKm * 0.42 + windAdvectKm * 0.45 + vec2(4.2, 7.8));
-      fogAlpha = fogDensity * fogSpatialMask * (0.45 + 0.55 * fogNoise) * smoothstep(17.5, 11.2, u_zoom) * 0.52;
+      fogAlpha = fogDensity * fogSpatialMask * (0.45 + 0.55 * fogNoise) * (1.0 - smoothstep(11.2, 17.5, u_zoom)) * 0.52;
     }
     vec3 fogColor = mix(vec3(0.80, 0.86, 0.91), vec3(0.95, 0.82, 0.68), goldenHourFactor * 0.55);
     fogColor = mix(fogColor, vec3(0.22, 0.28, 0.38), nightFactor * 0.7);
 
     // 9. 3D Slanted Rain Streaks & Street-Level Wet Surface Shimmer
-    float rainStrength = smoothstep(0.10, 4.5, precipMmH);
+    float rainStrength = 0.0; // Observed rain is positioned by the radar layer.
     float rainStreakVal = 0.0;
     float wetShimmerVal = 0.0;
 
@@ -893,7 +533,7 @@ const FRAGMENT_SHADER_SOURCE = `
     finalAlpha = shadowContribution;
 
     // Layer B: Street-level wet specular shimmer + ground lightning illumination
-    float groundFlash = lightningPulse * 0.18 + wetShimmerVal;
+    float groundFlash = wetShimmerVal;
     vec3 groundFlashRgb = vec3(0.72, 0.82, 0.96) * groundFlash * worldHorizonFade;
     finalRgb += groundFlashRgb * (1.0 - finalAlpha);
     finalAlpha = clamp(finalAlpha + groundFlash * 0.55 * worldHorizonFade, 0.0, 0.96);
@@ -926,8 +566,7 @@ const FRAGMENT_SHADER_SOURCE = `
 const CLOUD_RENDER_MAX_SCALE = 0.5;           // never more than half the drawing-buffer res
 const CLOUD_RENDER_MAX_LONG_SIDE = 920;       // crisp resolution when camera is stationary
 const CLOUD_RENDER_MOVING_LONG_SIDE = 640;    // fast resolution during active pan/zoom/pitch
-// When the camera is idle, cloud drift updates at ~22fps (wind advection is slow), which
-// cuts idle GPU load by ~65% while keeping cloud motion & lightning completely fluid.
+// Idle updates are requested at roughly 30Hz; actual frame rate is device-dependent.
 const IDLE_FRAME_INTERVAL_MS = 33;
 
 const COMPOSITE_VERTEX_SOURCE = `
@@ -962,7 +601,7 @@ function compileShader(gl, type, source) {
 }
 
 /**
- * Custom WebGL Layer implementing the 60FPS Rotterdam Volumetric Weather Engine
+ * Custom WebGL layer for the sampled Rotterdam cloud volumes.
  */
 export class VolumetricWeatherLayer {
   id = WEATHER_LAYER_ID;
@@ -1325,15 +964,74 @@ export class VolumetricWeatherLayer {
  * and WebGL custom layer lifecycle.
  */
 export function createWeatherEngineController(map, onStateChange = null) {
-  let activePresetId = 'live';
   let enabled = true;
   let dirty = true;
   let livePayload = null;
-  let liveNodes = WEATHER_SIMULATOR_PRESETS.scattered_cumulus.buildNodes();
-  let activeNodes = liveNodes;
-  let activeSolar = WEATHER_SIMULATOR_PRESETS.scattered_cumulus.solar;
+  let activeNodes = [];
+  let activeSolar = {};
   let pollInterval = null;
   let removed = false;
+  let fetching = false;
+  let requestFailed = false;
+  let radarAt = null;
+  let radarFrame = null;
+  let radarFetching = false;
+  let installingRadar = false;
+  let installedRadarUrl = null;
+
+  function installRadar() {
+    if (!map || removed || installingRadar || !map.getStyle()) return;
+    installingRadar = true;
+    try {
+    const age = radarAt ? (Date.now() - Date.parse(radarAt)) / 1000 : Infinity;
+    if (!radarFrame || age > 1200 || age < -300) {
+      if (map.getLayer('live-rain-radar')) map.removeLayer('live-rain-radar');
+      if (map.getSource('live-rain-radar')) map.removeSource('live-rain-radar');
+      return;
+    }
+    const source = map.getSource('live-rain-radar');
+    if (source && installedRadarUrl !== radarFrame.tile_url) source.setTiles([radarFrame.tile_url]);
+    else if (!source) map.addSource('live-rain-radar', {
+      type: 'raster', tiles: [radarFrame.tile_url], tileSize: 512, maxzoom: 7,
+      attribution: 'Weather data by RainViewer'
+    });
+    installedRadarUrl = radarFrame.tile_url;
+    if (!map.getLayer('live-rain-radar')) map.addLayer({
+      id: 'live-rain-radar', type: 'raster', source: 'live-rain-radar',
+      paint: { 'raster-opacity': 0.6, 'raster-fade-duration': 300 }
+    });
+    } catch (_) {
+      // Retry on the next style event if the style is still loading.
+    } finally { installingRadar = false; }
+  }
+
+  async function refreshRadar() {
+    if (!map || removed || radarFetching) return;
+    radarFetching = true;
+    const abort = new AbortController();
+    const timeout = setTimeout(() => abort.abort(), 15000);
+    try {
+      const response = await fetch(`${WEATHER_API_BASE_URL}/api/v1/weather/radar`, {
+        cache: 'no-store', signal: abort.signal
+      });
+      if (!response.ok) throw new Error('Radar unavailable');
+      const data = await response.json();
+      const frame = data.latest_frame;
+      if (!frame || !Number.isFinite(frame.time) || !frame.tile_url?.startsWith('https://tilecache.rainviewer.com/')) throw new Error('Invalid radar');
+      if (removed) return;
+      radarFrame = frame;
+      radarAt = new Date(frame.time * 1000).toISOString();
+    } catch (_) {
+      // Retain the previous observed frame only within its freshness window.
+    } finally {
+      clearTimeout(timeout);
+      radarFetching = false;
+      if (!removed) {
+        installRadar();
+        notify();
+      }
+    }
+  }
 
   // Allow disabling weather overlay in automated pixel-diff ocean cutout tests via ?weather=off
   if (typeof window !== 'undefined') {
@@ -1345,28 +1043,28 @@ export function createWeatherEngineController(map, onStateChange = null) {
 
   function computeSummaryState() {
     const nodes = activeNodes;
-    const count = Math.max(1, nodes.length);
-    const avgTemp = nodes.reduce((s, n) => s + (n.temperature_2m ?? 16), 0) / count;
-    const avgCloud = nodes.reduce((s, n) => s + (n.cloud_cover ?? 40), 0) / count;
-    const maxPrecip = Math.max(...nodes.map((n) => n.precipitation ?? 0));
-    const avgPrecip = nodes.reduce((s, n) => s + (n.precipitation ?? 0), 0) / count;
-    const avgWindKmh = nodes.reduce((s, n) => s + (n.wind_speed_10m ?? 16), 0) / count;
-    const maxGustsKmh = Math.max(...nodes.map((n) => n.wind_gusts_10m ?? 22));
-    const centerNode = nodes[6] || nodes[0] || {};
+    const centerNode = nodes.find(n => n.node_id === 7) || {};
+    const timestamps = nodes.map(n => Date.parse(n.timestamp)).filter(Number.isFinite);
+    const validAt = timestamps.length === 12 ? Math.min(...timestamps) : NaN;
+    const ageSeconds = (Date.now() - validAt) / 1000;
+    const status = !nodes.length ? 'unavailable'
+      : requestFailed || livePayload?.data_status !== 'fresh' || !Number.isFinite(ageSeconds) || ageSeconds > 1800 || ageSeconds < -300 ? 'stale' : 'live';
     const zoom = map ? map.getZoom() : 11.5;
     const altitude = computeAltitudeCloudFade(zoom);
-
     return {
-      presetId: activePresetId,
-      isLive: activePresetId === 'live',
+      status,
+      radarAt: radarAt && Date.now() - Date.parse(radarAt) <= 1200000 ? radarAt : null,
+      isLive: status === 'live',
+      validAt: Number.isFinite(validAt) ? new Date(validAt).toISOString() : null,
+      source: livePayload?.source || 'Open-Meteo / KNMI HARMONIE model',
       enabled,
-      temperatureC: Number(avgTemp.toFixed(1)),
-      cloudCoverPct: Math.round(avgCloud),
-      precipitationMmH: Number(maxPrecip > 0.2 ? maxPrecip.toFixed(1) : avgPrecip.toFixed(1)),
-      windSpeedKmh: Number(avgWindKmh.toFixed(1)),
-      windGustsKmh: Number(maxGustsKmh.toFixed(1)),
-      windDirectionDeg: centerNode.wind_direction_10m ?? 235,
-      weatherDescription: centerNode.weather_description || 'Wisselend bewolkt',
+      temperatureC: centerNode.temperature_2m ?? null,
+      cloudCoverPct: centerNode.cloud_cover ?? null,
+      precipitationMmH: centerNode.precipitation ?? null,
+      windSpeedKmh: centerNode.wind_speed_10m ?? null,
+      windGustsKmh: centerNode.wind_gusts_10m ?? null,
+      windDirectionDeg: centerNode.wind_direction_10m ?? null,
+      weatherDescription: centerNode.weather_description || 'Weather unavailable',
       solar: activeSolar,
       altitudePhase: altitude.phaseLabel,
       canopyOpacity: altitude.canopyOpacity,
@@ -1381,55 +1079,42 @@ export function createWeatherEngineController(map, onStateChange = null) {
   }
 
   async function fetchLiveWeatherGrid() {
+    if (fetching || removed) return;
+    fetching = true;
+    const abort = new AbortController();
+    const timeout = setTimeout(() => abort.abort(), 15000);
     try {
       const res = await fetch(`${WEATHER_API_BASE_URL}/api/v1/weather/live`, {
-        headers: { Accept: 'application/json' },
-        cache: 'no-store'
+        headers: { Accept: 'application/json' }, cache: 'no-store', signal: abort.signal
       });
-      if (!res.ok) return;
+      if (!res.ok) throw new Error('Weather unavailable');
       const data = await res.json();
+      const nodes = data.grid_nodes;
+      const fields = ['temperature_2m', 'cloud_cover', 'cloud_cover_low', 'cloud_cover_mid',
+        'cloud_cover_high', 'precipitation', 'wind_speed_10m', 'wind_direction_10m',
+        'wind_gusts_10m', 'wind_u', 'wind_v', 'fog_density', 'storm_intensity', 'lat', 'lon'];
+      if (!Array.isArray(nodes) || nodes.length !== 12 ||
+          new Set(nodes.map(n => n.node_id)).size !== 12 ||
+          nodes.some(n => !ROTTERDAM_WEATHER_NODES.some(c => c.node_id === n.node_id && c.lat === n.lat && c.lon === n.lon) ||
+            fields.some(key => !Number.isFinite(n[key])) || !Number.isFinite(Date.parse(n.timestamp))) ||
+          !Number.isFinite(data.solar?.azimuth_deg) || !Number.isFinite(data.solar?.elevation_deg) ||
+          !['fresh', 'stale'].includes(data.data_status)) throw new Error('Invalid weather snapshot');
+      if (removed) return;
+      activeNodes = [...nodes].sort((a, b) => a.node_id - b.node_id);
+      activeSolar = data.solar;
       livePayload = data;
-
-      if (Array.isArray(data.grid_nodes) && data.grid_nodes.length === 12) {
-        liveNodes = data.grid_nodes;
-      } else if (Array.isArray(data.features) && data.features.length === 12) {
-        liveNodes = data.features.map((f) => f.properties);
-      }
-
-      if (data.solar) {
-        activeSolar = data.solar;
-      }
-
-      if (activePresetId === 'live') {
-        activeNodes = liveNodes;
-        dirty = true;
+      requestFailed = false;
+      dirty = true;
+    } catch (_) {
+      requestFailed = true;
+    } finally {
+      clearTimeout(timeout);
+      fetching = false;
+      if (!removed) {
         if (map) map.triggerRepaint();
         notify();
       }
-    } catch (_) {
-      // Retain last valid or synthesized grid if offline
     }
-  }
-
-  function setPreset(presetId) {
-    const preset = WEATHER_SIMULATOR_PRESETS[presetId];
-    if (!preset) return;
-    activePresetId = presetId;
-
-    if (preset.isLive) {
-      activeNodes = liveNodes;
-      if (livePayload?.solar) {
-        activeSolar = livePayload.solar;
-      }
-      fetchLiveWeatherGrid();
-    } else {
-      activeNodes = preset.buildNodes();
-      activeSolar = preset.solar;
-    }
-
-    dirty = true;
-    if (map) map.triggerRepaint();
-    notify();
   }
 
   function setEnabled(val) {
@@ -1441,16 +1126,15 @@ export function createWeatherEngineController(map, onStateChange = null) {
   const stateApi = {
     getActiveNodes: () => activeNodes,
     getActiveSolar: () => activeSolar,
-    isEnabled: () => enabled,
+    isEnabled: () => enabled && activeNodes.length === 12 && computeSummaryState().status === 'live',
     consumeDirtyFlag: () => {
       const wasDirty = dirty;
       dirty = false;
       return wasDirty;
     },
-    setPreset,
     setEnabled,
     getState: computeSummaryState,
-    refreshLive: fetchLiveWeatherGrid
+    refreshLive: async () => { await Promise.allSettled([fetchLiveWeatherGrid(), refreshRadar()]); }
   };
 
   function ensureTopmostWeatherLayer() {
@@ -1505,19 +1189,24 @@ export function createWeatherEngineController(map, onStateChange = null) {
       attachLayer();
     }
     map.on('load', attachLayer);
+    map.on('load', refreshRadar);
     map.on('styledata', attachLayer);
+    map.on('styledata', installRadar);
     map.on('zoom', onZoomThrottled);
     map.once('remove', () => {
       removed = true;
       if (pollInterval) clearInterval(pollInterval);
+      map.off('load', refreshRadar);
       map.off('load', attachLayer);
       map.off('styledata', attachLayer);
+      map.off('styledata', installRadar);
       map.off('zoom', onZoomThrottled);
     });
   }
 
   fetchLiveWeatherGrid();
-  pollInterval = setInterval(fetchLiveWeatherGrid, 60000);
+  refreshRadar();
+  pollInterval = setInterval(() => { fetchLiveWeatherGrid(); refreshRadar(); }, 60000);
   notify();
 
   return stateApi;
