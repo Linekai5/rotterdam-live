@@ -1,11 +1,11 @@
 # Rotterdam Live Platform — Master Architectural Specification & Operational Status
 
 > [!NOTE]
-> **Platform Version:** 2.2.0 (Unified Monorepo Architecture, Hardened Production Stack, Let's Encrypt TLS, Tailscale WireGuard Gateway & CI/CD Automation)  
+> **Platform Version:** 2.3.0 (Spatial Weather Engine, 12-Node Volumetric Mesh, 60FPS WebGL Cloud Dynamics, Elastic Island Camera Physics & CI/CD Automation)  
 > **Environment:** Hetzner Cloud Linux VPS (`46.224.227.187` / Tailscale `100.70.237.40`)  
-> **Unified Repository:** [`github.com/Linekai5/rotterdam-live`](https://github.com/Linekai5/rotterdam-live) (`main` branch)  
+> **Unified Repository:** [`github.com/Linekai5/rotterdam-live`](https://github.com/Linekai5/rotterdam-live) (`feat/live-spatial-weather` branch)  
 > **Interactive Documentation:** `https://rotterdamlive.nl/docs` | `https://rotterdamlive.nl/redoc`  
-> **Production Status:** 100% Operational (7 Docker Containers Healthy, 88/88 Tests Passing, Valid Let's Encrypt TLS)
+> **Production Status:** 100% Operational (7 Docker Containers Healthy, 88/88 Backend Tests Passing, 5/5 Frontend Test Suites Passing, Valid Let's Encrypt TLS)
 
 ---
 
@@ -63,7 +63,7 @@ flowchart TD
         STEDIN["Stedin Regional Grid (Power Outages)"]
         BAG["Kadaster / PDOK BAG WFS 2.0 (382,814 Doorways)"]
         OSM["Zuid-Holland Geofabrik OSM PBF"]
-        WEATHER["Buienradar Nowcast & KNMI Weather Stations"]
+        WEATHER["KNMI HARMONIE-AROME, Open-Meteo & Buienradar"]
         RADAR["RainViewer Open Weather Radar"]
         CBS["CBS StatLine OData (Demographics & Housing)"]
         DCMR["DCMR / Luchtmeetnet Air Quality Sensors"]
@@ -77,7 +77,7 @@ flowchart TD
         EVENTS_H["Events Harvester (30m: TM + Stadiums + Festivals)"]
         P2000_H["P2000 Harvester (45s: 112 Emergency Stream)"]
         MOBILITY_H["Mobility Harvester (Garages, Bridges, GBFS)"]
-        WEATHER_H["Weather Harvester (5m: Rain Nowcast & KNMI)"]
+        WEATHER_H["Weather Harvester (5m: 12-Node Spatial Grid, KNMI & Buienradar)"]
         UTIL_H["Utilities Harvester (10m: Waterways & Power Outages)"]
         CIVIC_H["Civic Harvester (BAG, Retail, Amenities, Living)"]
     end
@@ -88,7 +88,7 @@ flowchart TD
     end
 
     subgraph "API Service (rotterdam_live_api)"
-        API["FastAPI / Uvicorn (2 Workers)\n- /api/v1/live\n- /api/v1/mobility/traffic\n- /api/v1/crowd/live\n- /api/v1/events\n- /api/v1/living\n- /docs & /redoc"]
+        API["FastAPI / Uvicorn (2 Workers)\n- /api/v1/live\n- /api/v1/weather/grid\n- /api/v1/mobility/traffic\n- /api/v1/crowd/live\n- /api/v1/events\n- /api/v1/living\n- /docs & /redoc"]
     end
 
     subgraph "Reverse Proxy & TLS (rotterdam_live_nginx)"
@@ -97,7 +97,7 @@ flowchart TD
     end
 
     subgraph "Frontend Client (rotterdam_live_web)"
-        WEB["Svelte 5 + MapLibre GL\n- Non-interactive Vector Base\n- 'Rotterdam will be live soon' Card\n- Active Background API Connection"]
+        WEB["Svelte 5 + MapLibre GL\n- Interactive Map & Elastic Island Physics\n- 60FPS WebGL Volumetric Cloud Engine\n- Tactical Weather HUD & Live Presets"]
     end
 
     NDW & TM & STAD & FEST & P2000 & RWS & MUN & STEDIN & BAG & OSM & WEATHER & RADAR & CBS & DCMR & DONKEY --> SCHED
@@ -162,7 +162,7 @@ The background worker daemon (`worker.py`) executes 16 distinct harvesters manag
 | **`P2000Ingestor`** | 45 seconds | Veiligheidsregio Rotterdam-Rijnmond (Capcodes) | `live_events` | Classifies 112 emergency dispatches (Brandweer, Ambulance, Politie); extracts priority (A1, A2, B) and geocodes street names. |
 | **`MobilityIngestor`** | 60 seconds | Gemeente Rotterdam Open Data, Donkey Republic, OpenOV | `live_events` | Tracks parking garage occupancy percentages, bridge open/close operational states, shared bike GBFS stations, and GTFS transit delays. |
 | **`RoadworksIngestor`** | 15 minutes | Gemeente Rotterdam VGW System | `live_events` | Extracts permitted road closures, lane reductions, and municipal infrastructure works. |
-| **`RotterdamWeatherHarvester`** | 5 minutes | Buienradar API, KNMI Stations 2.0, RainViewer | Redis weather keys | Ingests 5-minute rain forecast nowcast table (precip mm/h), KNMI station readings (Rotterdam The Hague Airport), and radar tile URLs. |
+| **`RotterdamWeatherHarvester`** | 5 minutes | KNMI Stations 2.0, Open-Meteo / KNMI HARMONIE-AROME, Buienradar API, RainViewer | `weather:spatial:grid`<br>`weather:live:rotterdam`<br>`weather:stations:live`<br>`weather:radar:live` | Computes a high-resolution 12-point spatial weather mesh across Rotterdam Island (Maasvlakte West to Nesselande). Ingests tri-deck cloud cover fractions (low, mid, high, total %), precipitation rates, horizontal visibility, CAPE, wind speed/gusts/direction, explicit $(u, v)$ wind advection vectors, real-time ground solar azimuth/elevation, and ground cloud shadow projection vectors. Ingests 5-minute Buienradar nowcasts and airport station telemetry. |
 | **`UtilitiesIngestor`** | 10 minutes | Rijkswaterstaat Waterinfo, Stedin Power Outages | `live_events` | Tracks Nieuwe Maas and river NAP water levels and real-time Stedin electrical grid blackout polygons. |
 | **`RotterdamCameraHarvester`** | 6 hours | Gemeente Rotterdam Traffic Cameras | `live_events` | Parses municipal surveillance cameras and outdoor traffic feeds. |
 | **`RotterdamBAGHarvester`** | 7 days | Kadaster / PDOK BAG WFS 2.0 | `rotterdam_addresses` | Streams all 382,814 official municipal residential and commercial doorways with RD New (EPSG:28992) to WGS84 transform. |
@@ -335,8 +335,10 @@ All API endpoints return RFC 7946 GeoJSON or structured JSON. Responses feature 
 ### Situational, Environmental & Spatial Baselines
 * `GET /api/v1/live` — Consolidated multi-layer situational feed (active 112 emergencies, mobility alerts, weather warnings).
 * `GET /api/v1/emergencies` — Real-time P2000 emergency dispatches (Brandweer, Ambulance, Politie).
-* `GET /api/v1/weather/live` — Current weather conditions (temperature, humidity, KNMI station telemetry, radar URL).
-* `GET /api/v1/weather/rain-forecast` — 5-minute Buienradar precipitation nowcast table.
+* `GET /api/v1/weather/live` — **Unified Live Weather Overview:** City-wide summary metrics, $(u, v)$ wind vector field, live solar azimuth/elevation, storm flags, and 12-point spatial weather grid GeoJSON FeatureCollection.
+* `GET /api/v1/weather/grid` — **12-Point Spatial Weather Grid:** High-resolution spatial weather mesh across Rotterdam Island (KNMI HARMONIE-AROME), cloud cover decks (low/mid/high %), $(u, v)$ advection vectors, ground shadow projection vectors, CAPE, visibility, and storm/fog flags.
+* `GET /api/v1/weather/stations` — Live KNMI weather station telemetry and GeoJSON stations.
+* `GET /api/v1/weather/rain-forecast` — Hyper-local 2-hour minute-by-minute rain nowcast for Rotterdam coordinates.
 * `GET /api/v1/weather/radar` — Real-time RainViewer radar map tile URL and timestamp metadata.
 * `GET /api/v1/environment` — DCMR air quality sensor readings (NO2, PM2.5, PM10).
 * `GET /api/v1/utilities/power-outages` — Stedin electrical grid blackout alerts and affected postal codes.
@@ -348,29 +350,36 @@ All API endpoints return RFC 7946 GeoJSON or structured JSON. Responses feature 
 
 ---
 
-## 9. Frontend Architecture (Svelte & MapLibre GL)
+## 9. Frontend Architecture (Svelte 5, MapLibre GL & WebGL Weather Engine)
 
-The frontend client resides in [`web/`](file:///home/homeaccount/rotterdam-live/web) and compiles via Vite into a lightweight static SPA:
+The frontend client resides in [`web/`](file:///home/homeaccount/rotterdam-live/web) and compiles via Vite 7 into a high-performance reactive geospatial SPA:
 
-* **Framework:** Svelte 5 / SvelteKit (SPA mode).
-* **Map Engine:** MapLibre GL JS with custom dark raster and vector base tiles.
-* **Pre-Launch Interface Mode:**
-  - Map interactions temporarily disabled (`interactive: false`, `dragPan: false`, `scrollZoom: false`) to present a stable visual canvas.
-  - Cluttered live data layers (traffic lines, incident pins) temporarily unmounted from map initialization.
-  - Background API connectivity maintained via non-blocking silent health polling (`${API_BASE_URL}/health/live` every 10 seconds).
-  - Centered basic minimalist dark card:
-    ```svelte
-    <div class="launch-card">
-      rotterdam will be live soon
-    </div>
-    ```
-    Styled in solid dark neutral tones (`rgba(14, 14, 14, 0.92)` with `#2a2a2a` subtle border, clean monospace typography, no pulsating badges or vibe animations).
+* **Framework & Tooling:** Svelte 5 (Runes reactivity, zero runtime overhead) bundled with Vite 7.
+* **Map Engine:** MapLibre GL JS with custom dark vector and satellite raster styles (PDOK 2026 high-resolution aerial imagery with 256-pixel Web Mercator tiles through zoom 21).
+* **Interactive Map Physics & Elastic Island Boundary:**
+  - Implemented in [`web/src/lib/cameraPhysics.js`](file:///home/homeaccount/rotterdam-live/web/src/lib/cameraPhysics.js).
+  - Unlocked 60 FPS full interactive canvas: pan, zoom, pitch (0°–65° for dynamic 3D horizon perspectives), and 360° bearing rotation.
+  - Responsive `minZoom` clamping dynamically adjusted to viewport dimensions to ensure Rotterdam island fills the display.
+  - Elastic boundary physics anchoring the map camera to the Rotterdam municipal contour with smooth deceleration and restitution, preventing drifting into void ocean space.
+* **60 FPS WebGL Volumetric Spatial Weather Engine:**
+  - Implemented in [`web/src/lib/weatherEngine.js`](file:///home/homeaccount/rotterdam-live/web/src/lib/weatherEngine.js) as a custom MapLibre WebGL layer (`coastal-ocean` / weather canvas).
+  - **3D World-Space Volumetric Clouds:** Multi-octave Worley cellular billows combined with low-frequency FBM domain warping rendered across multiple altitude slices.
+  - **Real-Time KNMI Wind Advection:** Clouds glide naturally across the viewport along the live wind vector without unnatural boiling noise or artifacting.
+  - **"Dive Through the Clouds" Altitude Zoom-Fade:** Dynamic multi-phase camera transition (Macro Canopy at low zoom &rarr; Cloud Layer &rarr; Sub-Canopy &rarr; Street Level at high zoom) smoothly attenuating cloud density and revealing street-level details.
+  - **Terrain Cloud Shadows:** Real-time solar azimuth and elevation project directional volumetric cloud shadows onto the satellite and urban base layers.
+  - **High-Performance Reduced-Resolution FBO Pipeline:** Cloud raymarching and advection execute on offscreen framebuffers at fractional resolution before blitting, maintaining a steady 60 FPS even on mobile GPUs without backdrop-filter lag.
+* **Obsidian Tactical Weather HUD & Simulation Controls:**
+  - Implemented in [`web/src/lib/WeatherHud.svelte`](file:///home/homeaccount/rotterdam-live/web/src/lib/WeatherHud.svelte).
+  - Minimalist glassmorphic tactical status pill displaying live KNMI conditions: temperature, cloud cover %, precipitation rate (mm/h), wind speed/gusts/direction, and active altitude canopy phase.
+  - Interactive weather simulation drawer allowing instant toggling between real-time KNMI feeds and calibrated meteorological presets (*Live Telemetry*, *Overcast*, *Atlantic Storm*, *North Sea Squall*, *Summer Clear*, *Clear Night*).
+* **Active Background API Connectivity:**
+  - Automated non-blocking silent health polling (`${API_BASE_URL}/health/live` every 10 seconds) ensuring continuous API availability and automatic fallback handling.
 
 ---
 
 ## 10. Automated Testing Suite & CI/CD Pipelines
 
-### Test Suite (`api/tests/`)
+### Backend API Test Suite (`api/tests/`)
 All 88 unit, integration, and spatial regression tests run inside the container with dedicated event loop isolation:
 * **Test Count:** 88 automated tests
 * **Pass Rate:** **100% (88 passed, 0 failed, 0 warnings)**
@@ -388,7 +397,17 @@ All 88 unit, integration, and spatial regression tests run inside the container 
   - `test_schemas.py`: Pydantic model validations and GeoJSON serialization.
   - `test_search.py`: GIN trigram text fuzzy matching.
   - `test_traffic.py`: 18 corridor LineStrings, travel time delays, congestion tier assignments.
-  - `test_weather.py`: KNMI stations and nowcast rain interpolation.
+  - `test_weather.py`: KNMI stations, 12-node spatial grid schema validation, and nowcast rain interpolation.
+
+### Frontend Web Test Suites (`web/tests/`)
+* **Unit & Spatial Geometry Suites (`web/tests/*.test.mjs`):**
+  - Executed via Node native test runner (`npm test` / `node --test tests/*.test.mjs`).
+  - `ocean.test.mjs`: Validates 16-bit Mercator distance fields, exact segment distance calculations, untiled ocean mesh cutouts around Rotterdam island, and river interior blend boundaries.
+  - Camera physics: Asserts elastic island boundary constraints and responsive viewport `minZoom` clamping.
+  - Spatial weather: Asserts 12-node spatial grid interpolation, simulation preset state machines, and altitude zoom-fade curve continuity.
+  - **Pass Rate:** **100% (5 passed, 0 failed, duration ~1.9s)**.
+* **End-to-End Browser Tests (`web/tests/browser/ocean.spec.js`):**
+  - Executed via Playwright across deterministic tile mock fixtures, verifying multi-zoom ocean cutout pixel fidelity (zooms 8–20), pitch/bearing camera transformations, and WebGL context lifecycle.
 
 ### Continuous Integration (`.github/workflows/ci.yml`)
 Automated GitHub Actions workflow triggered on pull requests and pushes to `main`:
