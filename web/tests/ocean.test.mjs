@@ -110,10 +110,9 @@ test('elastic island boundary physics and responsive minZoom clamp', async () =>
   assert.ok(cubicOutEasing(0.5) > 0.85);
 });
 
-test('12-node spatial weather interpolation, simulator presets, and altitude zoom-fade', async () => {
+test('12-node spatial weather interpolation and altitude zoom-fade', async () => {
   const {
     ROTTERDAM_WEATHER_NODES,
-    WEATHER_SIMULATOR_PRESETS,
     interpolateWeatherAtPoint,
     computeAltitudeCloudFade
   } = await import('../src/lib/weatherEngine.js');
@@ -123,8 +122,8 @@ test('12-node spatial weather interpolation, simulator presets, and altitude zoo
   assert.equal(ROTTERDAM_WEATHER_NODES[6].name, 'Rotterdam Centrum');
   assert.equal(ROTTERDAM_WEATHER_NODES[11].name, 'Prins Alexander / Nesselande');
 
-  // Verify Maasvlakte Coastal Squall preset exhibits strong coastal-to-inland precipitation gradient
-  const squallNodes = WEATHER_SIMULATOR_PRESETS.coastal_squall.buildNodes();
+  // An explicit test fixture checks interpolation without shipping demo weather.
+  const squallNodes = ROTTERDAM_WEATHER_NODES.map(n => ({ ...n, precipitation: n.lon < 4.2 ? 6 : 0, storm_intensity: n.lon < 4.2 ? 0.8 : 0 }));
   const westSample = interpolateWeatherAtPoint(3.985, 51.958, squallNodes);
   const eastSample = interpolateWeatherAtPoint(4.575, 51.965, squallNodes);
   assert.ok(westSample.precipitation > 4.0, 'Maasvlakte West must have heavy squall rain');

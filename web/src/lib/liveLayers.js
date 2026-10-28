@@ -4,7 +4,7 @@ import maplibregl from 'maplibre-gl';
  * Live PostGIS Layer Integration for Rotterdam Live
  */
 
-const DEFAULT_API_BASE = typeof window !== 'undefined' 
+const DEFAULT_API_BASE = import.meta.env?.DEV ? '' : typeof window !== 'undefined'
   ? (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
       ? 'http://localhost:8000'
       : '')
