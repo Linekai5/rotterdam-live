@@ -1,0 +1,14 @@
+{
+  "name": "rotterdam-live",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Real-time situational & geospatial platform for the Municipality of Rotterdam",
+  "scripts": {
+    "dev": "npm --prefix web run dev",
+    "edv": "npm --prefix web run dev",
+    "build": "npm --prefix web run build",
+    "preview": "npm --prefix web run preview",
+    "test": "npm --prefix web test",
+    "postinstall": "npm --prefix web install"
+  }
+}
