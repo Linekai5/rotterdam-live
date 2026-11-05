@@ -28,9 +28,11 @@ test.beforeEach(async ({ page }) => {
   await page.route('https://tiles.openfreemap.org/**', route => route.request().url().endsWith('/planet')
     ? route.fulfill({contentType:'application/json',body:'{}'})
     : route.fulfill({contentType:'application/x-protobuf',body:Buffer.alloc(0)}));
-  await page.goto('/?mode=satellite&zoom=11');
+  await page.route('**/tiles/satellite/**', route => route.fulfill({ contentType:'image/png', body:fixture }));
+  await page.route('**/tiles/vector/**', route => route.fulfill({ contentType:'application/x-protobuf', body:Buffer.alloc(0) }));
+  await page.goto('/?mode=satellite&zoom=11&weather=off');
   await page.waitForFunction(() => window.map?.getLayer('coastal-ocean')?.implementation?.program);
-  await page.addStyleTag({ content: '.layer-control-wrapper {display:none}' });
+  await page.addStyleTag({ content: '.city-shell, .weather-hud, .layer-control-wrapper {display:none!important}' });
 });
 
 for (const camera of [
@@ -41,7 +43,9 @@ for (const camera of [
   { zoom:20, center:[4.3793095,51.9634066] }
 ]) test(`ocean pixels and precise cutout at zoom ${camera.zoom}`, async ({page}) => {
   const errors=[];page.on('pageerror', e=>errors.push(e.message));
-  await page.evaluate(camera => new Promise(resolve => { map.once('idle',resolve);map.jumpTo(camera); }), camera);
+  await page.evaluate(camera => map.jumpTo(camera), camera);
+  await page.waitForFunction(() => map.areTilesLoaded());
+  await page.evaluate(() => new Promise(resolve => { map.once('render', resolve); map.triggerRepaint(); }));
   const locations = await page.evaluate(() => {
     const values=[];
     for(let y=80;y<850;y+=53)for(let x=60;x<1150;x+=59){

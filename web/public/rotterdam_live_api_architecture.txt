@@ -1,6 +1,6 @@
-# Rotterdam Live — Live Weather Architecture
+# Rotterdam Live — City Explorer & Live Weather Architecture
 
-Architecture revision 2.4.0 · 28 October 2026 · Development branch: `malidev`
+Architecture revision 2.5.0 · 5 November 2026 · Development branch: `malidev`
 
 This public overview describes the current development implementation. The session
 changes have not been deployed to production. The full repository specification is
@@ -17,10 +17,34 @@ also update PostGIS amenities and live events. FastAPI serves the snapshots to t
 Svelte / MapLibre frontend. The browser retrieves radar image tiles from RainViewer.
 
 Local development uses Vite on port 5173. Its `/api` and `/health` proxy forwards
-to FastAPI on port 8000. The browser requests weather/radar metadata every minute
-and health every ten seconds. Ingestion refreshes the model grid every two minutes,
+to FastAPI on port 8000. The browser requests model weather every minute, radar
+metadata only while enabled, and health every ten seconds. Ingestion refreshes the model grid every two minutes,
 point rain/radar metadata every five minutes, and stations every ten minutes.
 Polling cadence is separate from the model valid time and provider update cadence.
+
+## On-demand city explorer
+
+The charcoal explorer has Map layers, In view and Map sections, with muted sage,
+sand and clay accents. Every optional data layer starts off. Users can select
+events, neighbourhoods, shops, useful facilities, traffic, parking, bridges,
+roadworks, estimated district activity, emergency reports, local news and
+environmental records. City pulse is a model estimate, not a count of people;
+directories and annual statistics are labelled separately from current reports.
+
+Selected layers use the existing GeoJSON API, with two explorer requests at a
+time, a 400ms map-movement debounce, cancellation and a bounded 45-second cache.
+Most feeds request the current bounding box and at most 150 records; a notice
+asks users to zoom in when the cap is reached. Point clusters and an explicit
+Show more keep dense results manageable. Loading, stale, error and retry states
+are visible. Selected feeds refresh every minute while the page is visible.
+
+Search is debounced and supports Cmd/Ctrl+K and keyboard selection. Location
+details show typed metrics, source timestamps and safe source links. District
+profiles are requested only when opened and show the year of annual statistics.
+Aerial, Night and Atlas maps retain selected layers and preferences. The desktop
+panel can collapse; mobile uses an explorer sheet and a location sheet. Short
+panel/camera transitions respect reduced motion, including freezing idle cloud
+animation. No AI supervisor is mounted or requested.
 
 ## Weather contracts
 
@@ -86,10 +110,19 @@ remains illustrative. Model storm flags are metadata, not observed lightning or
 calibrated probabilities. Cloud cover percentage is not a map opacity target.
 Cloud shape and position remain procedural, without a satellite mask.
 
+Rain radar starts off and loads metadata/tiles only after it is enabled in Map.
+Its switch is independent of cloud atmosphere. Native map credits remain visible
+or available through the attribution control, including on small screens.
+The original volumetric clouds remain enabled by default on Aerial and across
+map-style changes. Zero model cloud cover gives a clear sky; the map does not add
+decorative clouds over a clear live-model snapshot.
+
 ## Session verification and remaining work
 
-Session checks passed: 32 relevant backend weather/crowd tests, six frontend unit
-and spatial tests, one browser cloud-rendering regression, and the Vite build.
+The November frontend checks passed: ten unit/spatial tests, eighteen browser
+checks (explorer, mobile, map/ocean lifecycle and clouds), and the Vite build.
+The earlier October weather session also passed 32 relevant backend weather/crowd
+tests; the backend suite was not rerun as part of the frontend-only work.
 The browser regression checks a compiled shader and actual framebuffer pixels,
 including cloud bodies and gaps; layer registration alone is insufficient.
 Overhead/tilted screenshots and desktop/mobile layout were inspected locally.
@@ -98,3 +131,5 @@ These checks verify software behaviour, not forecast accuracy. Satellite cloud
 outlines, cloud-level winds/heights, regular-grid expansion, station bias correction,
 direct KNMI spatial radar integration and multi-week accuracy measurement remain
 future work. A push to `malidev` does not trigger the `main` production workflow.
+The former `feat/live-spatial-weather` branch has been removed; its history and
+the development changes are retained on `malidev`.

@@ -18,7 +18,9 @@ observations older than 30 minutes are excluded from the unified current values.
 Crowd weather integration reads nested rain/wind fields and preserves zeros.
 
 Observed RainViewer raster tiles show rain geography with frame time and visible
-source credit. Frames older than 20 minutes are removed. Maximum source zoom is
+source credit. As of 5 November, radar starts off: the Map panel's Rain radar
+switch requests metadata/tiles only when enabled, independently of clouds.
+Frames older than 20 minutes are removed. Maximum source zoom is
 7; map overscaling provides no additional meteorological resolution. A metadata
 frame timestamp is not the individual radar observation time. Rain streaks and
 random lightning flashes have been removed. Clouds remain procedural illustrations
@@ -31,6 +33,9 @@ the intermediate streak/sheet appearance. These heights, projections and cloud
 shapes remain approximations. Both decks use model 10m wind, converted to km/s.
 The card is charcoal with muted text and no simulator controls. Rendering uses a
 reduced-resolution framebuffer; a 33ms idle timer is not a guarantee of 60 FPS.
+The system reduced-motion preference freezes idle cloud advection. Explorer
+overlays draw above the atmosphere; guarded custom-layer ordering prevents
+recursive MapLibre style changes.
 
 Local development uses Vite's API/health proxy to avoid localhost/127.0.0.1 CORS
 mismatches. The local worker must restart when ingestion code changes. Production
@@ -44,6 +49,7 @@ verification. No claim of measured forecast accuracy is made by this implementat
 
 The full session explanation, cache/status contract, renderer details, validation
 results and remaining limitations are recorded in the root
-`rotterdam_live_api_architecture.txt` (architecture revision 2.4.0). Work is carried
+`rotterdam_live_api_architecture.txt` (architecture revision 2.5.0, updated
+5 November with the on-demand frontend explorer). Work is carried
 on `malidev`, including the earlier feature-branch history. Production remains
 unchanged by this development work.

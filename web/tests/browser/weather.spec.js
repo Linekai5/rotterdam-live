@@ -2,6 +2,8 @@ import { test, expect } from '@playwright/test';
 import { ROTTERDAM_WEATHER_NODES } from '../../src/lib/weatherEngine.js';
 
 test('high cloud cover compiles and draws visible clouds without presets', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
   await page.route('**/api/v1/weather/live', route => route.fulfill({ json: {
     data_status: 'fresh', source: 'Open-Meteo / KNMI HARMONIE model',
     solar: { azimuth_deg: 202, elevation_deg: 23 },
@@ -12,6 +14,7 @@ test('high cloud cover compiles and draws visible clouds without presets', async
   } }));
   await page.goto('/');
   await expect(page.getByRole('button', { name: 'Rotterdam weather details' })).toContainText('82%');
+  expect(await page.evaluate(() => window.weatherController.getState().enabled)).toBe(true);
   await page.waitForFunction(() => {
     const layer = window.map?.getLayer('rotterdam-volumetric-weather')?.implementation;
     return layer?.program && layer.fbo && layer.lastFboRenderMs > 0;
@@ -43,4 +46,14 @@ test('high cloud cover compiles and draws visible clouds without presets', async
   expect(alpha.clear).toBeGreaterThan(0.01);
   expect(alpha.dense).toBeGreaterThan(0.01);
   await expect(page.getByText('SIM OVERRIDE')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Map', exact: true }).click();
+  await expect(page.getByRole('switch', { name: 'Cloud atmosphere', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await page.getByRole('button', { name: 'Night', exact: true }).click();
+  await page.getByRole('button', { name: 'Aerial', exact: true }).click();
+  await page.waitForFunction(() => {
+    const layer = window.map?.getLayer('rotterdam-volumetric-weather')?.implementation;
+    return layer?.program && layer.lastFboRenderMs > 0;
+  });
+  expect(await page.evaluate(() => window.weatherController.isEnabled())).toBe(true);
+  expect(errors).toEqual([]);
 });
