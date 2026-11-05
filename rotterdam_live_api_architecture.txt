@@ -1,11 +1,11 @@
 # Rotterdam Live Platform — Master Architectural Specification & Operational Status
 
 > [!NOTE]
-> **Architecture Revision:** 2.4.0 — 28 October 2026 (Live Weather Validation, Observed Rain Radar, Volumetric Clouds & Muted Weather UI; application package versions are unchanged)
+> **Architecture Revision:** 2.5.0 — 5 November 2026 (On-Demand City Explorer, Responsive Dark Interface, Map Filters & Live Weather; application package versions are unchanged)
 > **Environment:** Hetzner Cloud Linux VPS (`${PUBLIC_BIND_ADDRESS}` / Tailscale `${PRIVATE_BIND_ADDRESS}`)
 > **Unified Repository:** [`github.com/Linekai5/rotterdam-live`](https://github.com/Linekai5/rotterdam-live) (`malidev` development branch; `main` is the deployment branch)
 > **Interactive Documentation:** `https://rotterdamlive.nl/docs` | `https://rotterdamlive.nl/redoc`
-> **Verification Scope:** Weather changes were implemented and checked locally on ports 5173/8000. They have not been deployed to production in this session. Historical infrastructure figures elsewhere in this document are a platform baseline, not a fresh production audit. See sections 10–12 for validation and limitations.
+> **Verification Scope:** Frontend and weather changes were implemented and checked locally on ports 5173/8000. They have not been deployed to production in this session. Historical infrastructure figures elsewhere in this document are a platform baseline, not a fresh production audit. See sections 10–13 for validation and limitations.
 
 ---
 
@@ -97,7 +97,7 @@ flowchart TD
     end
 
     subgraph "Frontend Client (rotterdam_live_web)"
-        WEB["Svelte 5 + MapLibre GL\n- Interactive Map & Elastic Island Physics\n- Two Volumetric Cloud Decks\n- Live Weather Card & Observed Rain Radar"]
+        WEB["Svelte 5 + MapLibre GL\n- On-Demand City Explorer & Search\n- Optional Clustered Data Layers\n- Live Weather & Optional Observed Rain Radar"]
     end
 
     NDW & TM & STAD & FEST & P2000 & RWS & MUN & STEDIN & BAG & OSM & WEATHER & RADAR & CBS & DCMR & DONKEY --> SCHED
@@ -351,23 +351,37 @@ API endpoints return RFC 7946 GeoJSON or structured JSON. ETag support and laten
 
 ---
 
-## 9. Frontend Architecture (Svelte 5, MapLibre GL & WebGL Weather Engine)
+## 9. Frontend Architecture (Svelte 5, City Explorer, MapLibre GL & WebGL Weather)
 
-The `web/` Svelte 5 SPA is bundled by Vite 7. `App.svelte` mounts `MapComponent.svelte`, which initializes MapLibre, the existing ocean/camera layers, the weather controller, and `WeatherHud.svelte`.
+The `web/` Svelte 5 SPA is bundled by Vite 7. `App.svelte` mounts `MapComponent.svelte`, which initializes MapLibre, the existing ocean/camera layers, the weather controller, `WeatherHud.svelte`, and `CityExplorer.svelte`. The explorer replaces the former layer-control UI in the mounted application. It starts with every optional dataset off; the live weather card and model atmosphere remain independent. No AI supervisor is mounted or requested.
+
+* **City Explorer:** A charcoal panel with muted sage, sand and clay accents provides Map layers, In view and Map sections. Desktop users can collapse it without disabling selected layers; mobile users get a bottom sheet and a separate location sheet. Search, result counts, individual retry controls, selected-layer chips, clear-all and source-specific details make the map usable without loading every dataset. See section 13 for endpoints and request controls.
+* **Appearance & Motion:** Aerial, Night and Atlas base maps retain selected overlays, labels and building preferences during style changes. Panels, source opacity and camera movements use short transitions. The operating system's reduced-motion preference disables these transitions, elastic snap animation and idle cloud animation. These controls do not introduce weather presets.
 
 * **Existing Map Behaviour:** Satellite/vector styles, pan, zoom, pitch to 65°, bearing rotation, responsive minimum zoom, and elastic island boundary behaviour remain in `map.js`, `cameraPhysics.js`, and the ocean modules. Those systems predate this session.
 * **Cloud Layer:** `weatherEngine.js` installs the custom layer `rotterdam-volumetric-weather`. It interpolates the existing 12-node model data, samples two continuous 3D density fields, traces solar illumination through them, and composites cloud colour/opacity over the map. The lower deck combines low/middle cover; the upper deck uses high cover. See section 12.5 for the precise approximation.
-* **Observed Rain Layer:** `live-rain-radar` is a separate MapLibre raster source/layer using the latest past RainViewer frame. It has its own frame age checks and can remain available when model weather is stale.
+* **Observed Rain Layer:** `live-rain-radar` is a separate MapLibre raster source/layer using the latest past RainViewer frame. It starts off and requests metadata/tiles only after Rain radar is enabled in Map. It has its own frame age checks and can remain available when model weather is stale.
 * **Weather Card:** A compact charcoal card shows Centrum temperature, condition, wind, cloud cover, model rain rate, status, and valid time. Its expandable details explain the source and the difference between model values and radar. Muted colours, visible attribution, and responsive sizing replace the previous pill/simulator drawer. There are no weather presets or simulator selection methods.
-* **Polling:** Model weather and radar metadata are fetched on initialization and every 60 seconds, with independent 15-second timeouts and overlap guards. Health is polled every 10 seconds; that silent ping is not a weather freshness check or a guarantee of availability.
+* **Polling:** Model weather is fetched on initialization and every 60 seconds; radar metadata follows that cadence only while enabled. Both have independent 15-second timeouts and overlap guards. Selected explorer datasets refresh every minute while the document is visible, and when it becomes visible again. Health is polled every 10 seconds with an 8-second timeout; that ping is not a weather freshness check or a guarantee that every feed is available.
 * **Local Connection:** In Vite development, the default API base is the page origin. `/api` and `/health` are proxied from port 5173 to `http://localhost:8000`. This works from `localhost:5173` and `localhost:5173`. `VITE_API_BASE_URL` can override the default and may require CORS configuration. Production public requests use the existing Nginx `/api` gateway.
-* **Rendering Cost:** The offscreen buffer is at most half the drawing-buffer resolution, capped at a 920-pixel long edge while stationary and 640 during movement. A 33ms timer schedules idle repaint requests. A short local headless Chrome sample measured about 30 browser frames/second; 60 FPS and mobile performance are not guaranteed.
+* **Rendering Cost:** The offscreen buffer is at most half the drawing-buffer resolution, capped at a 920-pixel long edge while stationary and 640 during movement. A 33ms timer schedules idle repaint requests unless reduced motion is enabled. A prior short local headless Chrome sample measured about 30 browser frames/second; 60 FPS and mobile performance are not guaranteed. Clouds render beneath explorer overlays so selected markers and corridors remain readable. Custom-layer ordering is guarded against recursive MapLibre style events.
 
 ---
 
 ## 10. Automated Testing Suite & CI/CD Pipelines
 
-### Checks Completed During This Session
+### Frontend Explorer Checks — 5 November 2026
+
+| Command / check | Recorded result | What it establishes |
+| :--- | :--- | :--- |
+| `npm --prefix web test` | 10 passed | Existing ocean/weather checks plus data normalization, safe links, zero/false values, lazy loading, two-request concurrency, cancellation, filter races and style restoration. |
+| `npm --prefix web run test:browser` | 18 passed | Ten explorer workflows, seven ocean/imagery/lifecycle checks, and the cloud shader/framebuffer regression. Includes mobile navigation, clusters, optional radar, source errors, keyboard access and reduced motion. |
+| `npm --prefix web run build` | Passed | Production Svelte/Vite bundle builds. |
+| Local API / visual review | Completed at 5173 → 8000 | Actual event, mobility, crowd, directory and district-profile formats inspected; desktop/mobile layouts reviewed. Optional datasets and radar are absent from initial browser requests. |
+
+No backend code changed for the explorer. The backend test results below belong to the earlier weather session; they were not rerun as a new full-backend audit. Browser fixtures verify deterministic software behaviour; local live-feed checks do not certify upstream accuracy or continuous availability.
+
+### Weather Session Checks — 28 October 2026
 
 | Command / check | Recorded result | What it establishes |
 | :--- | :--- | :--- |
@@ -473,9 +487,9 @@ The controller begins with an empty node list. It requires exactly 12 unique, kn
 | `live` | Accepted grid, no request failure, backend says fresh, oldest model time within the allowed age window | Enabled. |
 | `stale` / displayed as "Outdated" | Failed request, stale backend status, or model timestamp outside the freshness window | Disabled; prior accepted values can remain visible with their original time. |
 
-The UI consistently reads node 7 (Rotterdam Centrum) for temperature, condition, cloud cover, rain, wind speed and direction. It no longer combines a citywide mean temperature/wind with a maximum rain value and an unrelated direction. Top-level API station values remain available for other consumers.
+The UI consistently reads node 7 (Rotterdam Centrum) for temperature, condition, cloud cover, rain, wind speed and direction. It no longer combines a citywide mean temperature/wind with a maximum rain value and an unrelated direction. Top-level API station values remain available for other consumers. The volumetric atmosphere is enabled by default on Aerial and remains enabled across style changes unless the user switches it off. This is independent of the optional city datasets and radar. A valid grid reporting zero cloud cover produces a clear sky; the renderer does not add decorative clouds to override live conditions. The browser regression verifies default enablement, cloud pixels and restoration after returning to Aerial.
 
-Radar metadata is fetched separately with a 15s timeout. The frontend accepts the expected RainViewer HTTPS tile host, uses 512px raster tiles with maximum source zoom 7, and displays the latest past frame with opacity 0.6. It removes a frame older than 20 minutes or more than five minutes in the future. New frame URLs update the source, and style events retry layer installation safely. There is no future-frame fallback or radar timeline animation. Frame time refers to the provider's composite metadata, not necessarily the exact observation time of every pixel.
+Radar starts disabled. Enabling it requests metadata separately with a 15s timeout; disabling it aborts metadata requests and removes the raster layer/source. Its state is independent of the cloud atmosphere switch. The frontend accepts the expected RainViewer HTTPS tile host, uses 512px raster tiles with maximum source zoom 7, and displays the latest past frame with opacity 0.6. It removes a frame older than 20 minutes or more than five minutes in the future. New frame URLs update the source, and style events retry layer installation safely. There is no future-frame fallback or radar timeline animation. Frame time refers to the provider's composite metadata, not necessarily the exact observation time of every pixel.
 
 All runtime presets, preset exports, `setPreset`, simulator controls and synthetic initial weather have been removed. `?weather=off` remains a developer/test switch for disabling effects; it does not supply alternative weather. Timers/listeners are cleaned up when the map is removed.
 
@@ -513,3 +527,46 @@ Cloud percentage is a model sky-cover estimate. It is not a target percentage of
 At approximately 13:33 Rotterdam time during the initial audit, the Centrum model gave 14.2°C, 16.9km/h wind from 238°, and dry conditions. The airport station's 13:20 observation gave 14.0°C, 18km/h from 230°, and no rain. Cloud descriptions differed: the model said mostly clear/20% cover while the airport reported heavy cloud. The positions and valid times differed; this single comparison is not an accuracy score.
 
 No satellite cloud mask, exact observed cloud outlines, regular model-grid expansion, cloud-height/wind-profile ingestion, station bias correction, direct KNMI spatial radar integration, or multi-week forecast verification was implemented. Those remain candidate improvements. A future evaluation should match locations/times, preserve forecast lead times, measure temperature/wind errors and rain detection/timing, and compare against independent observations. The current system is a better-labelled model-driven visualization with an observed rain layer, not a measured digital reconstruction of Rotterdam's sky.
+
+---
+
+## 13. On-Demand Frontend Explorer — 5 November 2026
+
+### 13.1 Optional Map Datasets
+
+Every row below starts disabled. Enabling a row is the action that requests its data; removing it aborts its request and removes its source/layers. Directory data, scheduled events and annual statistics are not represented as real-time measurements.
+
+| UI layer | API route under `/api/v1` | Presentation / filters |
+| :--- | :--- | :--- |
+| What's on | `/events` | Clustered event points; type and upcoming / 24-hour / 7-day windows. Known parking/transport ticket add-ons are excluded from activity listings. |
+| Neighbourhoods | `/spatial/districts` | District outlines; optional profile requested separately. |
+| Shops & essentials | `/retail` | Clustered directory; supermarket default, convenience, bakery, pharmacy or all shops. |
+| Useful places | `/amenities` | Clustered facilities; water taps default, toilets, AEDs or EV chargers. |
+| Traffic | `/mobility/traffic` | Corridor lines coloured by congestion; speeds and travel delays in details. |
+| Parking | `/mobility?subcategory=parking` | Clustered locations; availability, capacity and occupancy when supplied. Zero spaces remains zero. |
+| Bridges | `/mobility?subcategory=bridge` | Opening and road-traffic information when supplied. |
+| Roadworks | `/mobility/roadworks` | Work locations and dates. |
+| City pulse | `/crowd/live` | District choropleth and legend; explicitly an estimated activity index, not a count of people. |
+| Emergency reports | `/live?category=emergency` | Geolocated regional dispatch reports. |
+| Local news | `/live?category=news` | Geolocated stories with original-source links. |
+| Air & environment | `/environment` | Available sensor records and units, without inventing missing readings. |
+
+### 13.2 Request and Rendering Controls
+
+`explorerData.js` defines the catalog, allowed parameters, typed details and geometry helpers. `mapDataController.js` owns requests and MapLibre data sources. It limits explorer requests to two at a time, uses a 400ms viewport debounce, rounds bounding boxes to four decimal places and retains at most 32 cached responses for 45 seconds. The two district-polygon feeds are citywide and filtered to the visible area locally. Other datasets request the current bounding box and a limit of 150 records; reaching that limit displays a zoom-in notice rather than implying completeness. This concurrency cap applies to explorer data, independently of map tiles, weather, health, search and requested profiles.
+
+Each enabled layer has loading, ready, stale or error state, with retry and last-success information. Fifteen-second timeouts, aborts and revision checks prevent disabled or superseded requests from replacing the active filter/viewport results. Failures retain accepted data with a warning; an empty response is distinct from a failed feed. Minute refreshes pause while the page is hidden. Point clusters reduce dense marker clutter and expand when selected. In-view results initially render 40 rows, with explicit Show more. Style changes rebuild sources from accepted data without fetching all datasets again. Restoration is deferred out of the `styledata` render pass so MapLibre evaluates new symbol layouts before placement; the browser regression also asserts that style switching produces no uncaught errors.
+
+### 13.3 Search, Details and Accessibility
+
+`CityExplorer.svelte` provides a 300ms debounced, cancellable `/search` request with at most eight results. Cmd/Ctrl+K opens/focuses search; Arrow Down enters results and Escape dismisses search/details/panels with focus restoration. Selected points and geometries get an independent map highlight and a `FeatureDetails.svelte` sheet. Typed fields retain zero/false values, parse MapLibre's stringified property objects, strip provider HTML from summaries and allow only HTTP(S) links. Event images are loaded only for the selected record and use muted styling.
+
+A district's `/living/districts/{name}/passport` is fetched only after the profile button is pressed, with a 12-second timeout and cancellation. Annual population/housing figures show their year and are labelled separately from live data. Out-of-bounds regional records can still show details; the UI does not promise a map focus outside the supported map extent.
+
+Buttons, switches and filters have accessible names and visible keyboard focus. Hidden explorer panels are inert. Mobile details return to the result list; opening the explorer dismisses the location sheet. Native map attribution remains available without covering mobile navigation. `MapAppearance.svelte` controls base maps, labels, building heights, cloud atmosphere and optional radar. Operating-system reduced motion also stops continuous cloud advection. No supervisor UI, inference request or AI endpoint was introduced.
+
+### 13.4 Practical Limits and Delivery
+
+The frontend uses the existing API and its upstream freshness policies. Browser refresh time is not a new source observation; a model estimate, directory or annual figure does not become live because it is fetched again. Bounding-box intersection for the results list is conservative for district polygons, and 150-record caps can omit records until the view is narrowed. Existing MapLibre/weather bundle size and rendering cost remain; no universal frame-rate or Awwwards-level quality claim is made.
+
+Development work belongs on `malidev`. Earlier feature-branch history is preserved there, and `feat/live-spatial-weather` has been removed locally and remotely. No merge to `main` or production deployment is part of this work.

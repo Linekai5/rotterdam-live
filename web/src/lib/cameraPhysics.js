@@ -192,9 +192,9 @@ export function installElasticIslandPhysics(map) {
       isSnappingBack = true;
       map.easeTo({
         center: [clamped.lng, clamped.lat],
-        duration: SNAP_BACK_DURATION_MS,
+        duration: typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : SNAP_BACK_DURATION_MS,
         easing: cubicOutEasing,
-        essential: true
+        essential: false
       });
     }
   };

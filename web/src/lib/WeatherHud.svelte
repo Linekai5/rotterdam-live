@@ -9,7 +9,7 @@
   }
 </script>
 
-<aside class="weather-hud" aria-label="Rotterdam weather">
+<aside class="weather-hud" class:details-open={detailsOpen} aria-label="Rotterdam weather">
   <button class="weather-summary" on:click={() => detailsOpen = !detailsOpen} aria-expanded={detailsOpen} aria-label="Rotterdam weather details">
     <div class="heading"><span>ROTTERDAM</span><span class="status"><i></i>{weatherState.status === 'live' ? 'Live' : weatherState.status === 'stale' ? 'Outdated' : 'Unavailable'}<span class:expanded={detailsOpen} class="chevron">⌄</span></span></div>
     {#if weatherState.nodes?.length}
@@ -17,7 +17,7 @@
       <div class="metrics"><span>Cloud cover <b>{format(weatherState.cloudCoverPct)}%</b></span><span>Rain <b>{format(weatherState.precipitationMmH, 1)} <small>mm/h</small></b></span></div>
     {:else}<p class="empty">Waiting for current weather</p>{/if}
   </button>
-  <div class="source-line"><span>Centrum · {timeLabel(weatherState.validAt)}</span>{#if weatherState.radarAt}<a href="https://www.rainviewer.com/" target="_blank" rel="noreferrer">Radar {timeLabel(weatherState.radarAt)} · RainViewer</a>{:else}<span>Radar unavailable</span>{/if}</div>
+  <div class="source-line"><span>Centrum · {timeLabel(weatherState.validAt)}</span>{#if weatherState.radarAt}<a href="https://www.rainviewer.com/" target="_blank" rel="noreferrer">Radar {timeLabel(weatherState.radarAt)} · RainViewer</a>{:else}<span>{weatherState.radarEnabled ? 'Radar unavailable' : 'Radar off'}</span>{/if}</div>
   {#if detailsOpen}
     <div class="weather-details">
       <div class="detail-row"><span>Source</span><span>KNMI via Open-Meteo</span></div>
@@ -31,7 +31,7 @@
 </aside>
 
 <style>
-  .weather-hud { position: fixed; top: 20px; right: 20px; z-index: 120; width: 286px; max-width: calc(100vw - 32px); color: #e6e4df; background: #202322f5; border: 1px solid #ffffff1c; border-radius: 13px; box-shadow: 0 8px 28px #0003; font: 12px system-ui, sans-serif; overflow: hidden; }
+  .weather-hud { position: fixed; top: 20px; right: 20px; z-index: 120; width: 286px; max-width: calc(100vw - 32px); color: #e6e4df; background: #202322f5; border: 1px solid #ffffff1c; border-radius: 13px; box-shadow: 0 8px 28px #0003; font: 12px system-ui, sans-serif; overflow: hidden; max-height: calc(100dvh - 40px); overflow-y: auto; scrollbar-width: thin; }
   button { font: inherit; color: inherit; cursor: pointer; }
   .weather-summary { display: block; width: 100%; padding: 16px 17px 13px; background: transparent; border: 0; text-align: left; }
   .weather-summary:hover { background: #ffffff04; }
@@ -59,5 +59,19 @@
   .refresh { display: flex; justify-content: space-between; width: 100%; border: 1px solid #ffffff20; border-radius: 6px; background: #ffffff04; padding: 7px 10px; margin-top: 13px; }
   button:focus-visible, a:focus-visible { outline: 2px solid #bdc4b8; outline-offset: -3px; }
   .empty { margin-bottom: 0; }
+  @media (max-width: 700px) {
+    .weather-hud:not(.details-open) { width: 148px; top: 12px; right: 12px; }
+    .weather-hud:not(.details-open) .weather-summary { padding: 10px 13px; }
+    .weather-hud:not(.details-open) .heading > span:first-child,
+    .weather-hud:not(.details-open) .condition-copy,
+    .weather-hud:not(.details-open) .metrics,
+    .weather-hud:not(.details-open) .source-line a { display: none; }
+    .weather-hud:not(.details-open) .heading { justify-content: flex-end; }
+    .weather-hud:not(.details-open) .conditions { padding: 5px 0 0; }
+    .weather-hud:not(.details-open) .temperature { font-size: 29px; }
+    .weather-hud:not(.details-open) .temperature small { font-size: 22px; }
+    .weather-hud:not(.details-open) .source-line { padding: 7px 13px; }
+    .weather-hud.details-open { width: calc(100vw - 24px); }
+  }
   @media (max-width: 480px) { .weather-hud { top: 12px; right: 12px; width: 260px; } .temperature { font-size: 36px; } .weather-summary { padding: 13px 15px; } }
 </style>

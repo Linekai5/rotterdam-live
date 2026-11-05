@@ -68,6 +68,13 @@ export const STYLE_CONFIGS = {
 };
 
 export async function initMap(mapElement, onReady) {
+  // Keep base-map attribution available in every visual mode.
+  for (const config of Object.values(STYLE_CONFIGS)) {
+    if (config.style.sources.openmaptiles) {
+      config.style.sources.openmaptiles.attribution = STYLE_CONFIGS.satellite.style.sources.openmaptiles.attribution;
+    }
+  }
+
   // Update live planet endpoints in background (non-blocking)
   fetch('https://tiles.openfreemap.org/planet')
     .then(res => res.ok ? res.json() : null)
@@ -127,7 +134,7 @@ export async function initMap(mapElement, onReady) {
     maxPitch: 65,
     antialias: true,
     renderWorldCopies: false,
-    attributionControl: false,
+    attributionControl: { compact: true },
     maxTileCacheSize: 500,
     fadeDuration: 0,
     transformRequest: (url, resourceType) => {
@@ -152,6 +159,19 @@ export async function initMap(mapElement, onReady) {
       return { url };
     }
   });
+
+  // MapLibre 2.x initially expands compact attribution. Collapse it once so
+  // mobile navigation is not covered; the native disclosure stays available.
+  function prepareAttribution() {
+    const control = map.getContainer().querySelector('.maplibregl-ctrl-attrib');
+    if (control?.classList.contains('maplibregl-compact-show')) {
+      control.querySelector('summary')?.click();
+      map.off('data', prepareAttribution);
+    }
+  }
+  map.on('data', prepareAttribution);
+  map.once('remove', () => map.off('data', prepareAttribution));
+  prepareAttribution();
 
   if (typeof window !== 'undefined') window.map = map;
 
@@ -194,14 +214,13 @@ export function switchStyle(map, mode, state = {}) {
     container.style.backgroundColor = config.bgColor;
   }
 
-  // Restore detail preferences after the new style is available.
+  // Restore preferences outside the render pass that emits styledata.
   map.once('styledata', () => {
-    if (state.labels === false) {
-      toggleLabels(map, false);
-    }
-    if (state.buildings3d) {
-      toggle3DBuildings(map, true);
-    }
+    queueMicrotask(() => {
+      if (!map.getStyle()) return;
+      if (state.labels === false) toggleLabels(map, false);
+      if (state.buildings3d) toggle3DBuildings(map, true);
+    });
   });
 }
 
@@ -211,7 +230,7 @@ export function toggleLabels(map, visible) {
   if (!style || !style.layers) return;
   const visibility = visible ? 'visible' : 'none';
   style.layers.forEach(l => {
-    if (l.type === 'symbol') {
+    if (l.type === 'symbol' && !l.id.startsWith('explore-') && !l.id.startsWith('explorer-selection')) {
       try {
         map.setLayoutProperty(l.id, 'visibility', visibility);
       } catch (e) {}
@@ -258,5 +277,6 @@ export function toggle3DBuildings(map, enabled) {
 
 export function resetView(map) {
   if (!map) return;
-  map.fitBounds(ROTTERDAM_BOUNDS, { padding: 40, duration: 800 });
+  const reducedMotion = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  map.fitBounds(ROTTERDAM_BOUNDS, { padding: 40, pitch: 0, bearing: 0, duration: reducedMotion ? 0 : 800 });
 }

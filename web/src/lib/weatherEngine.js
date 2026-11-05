@@ -619,6 +619,8 @@ export class VolumetricWeatherLayer {
     this.nodeMetersFlat = new Float32Array(24);
     this.startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
     this.map = null;
+    this.motionPreference = typeof window !== 'undefined' ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+    this.onMotionChange = () => this.map?.triggerRepaint();
 
     // Offscreen reduced-resolution cloud render target + composite pass
     this.fbo = null;
@@ -640,6 +642,7 @@ export class VolumetricWeatherLayer {
 
   onAdd(map, gl) {
     this.map = map;
+    this.motionPreference?.addEventListener('change', this.onMotionChange);
     const vs = compileShader(gl, gl.VERTEX_SHADER, VERTEX_SHADER_SOURCE);
     const fs = compileShader(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER_SOURCE);
 
@@ -828,7 +831,7 @@ export class VolumetricWeatherLayer {
       const camY = camTargetY + Math.cos(bearingRad) * horizBackoffMeters;
       const camZ = approxAltMeters;
 
-      const elapsedSec = (nowMs - this.startTime) * 0.001;
+      const elapsedSec = this.motionPreference?.matches ? 0 : (nowMs - this.startTime) * 0.001;
 
       const solar = this.stateController.getActiveSolar();
       const azRad = ((solar.azimuth_deg ?? 195) * Math.PI) / 180;
@@ -935,7 +938,7 @@ export class VolumetricWeatherLayer {
   }
 
   _scheduleIdleFrame() {
-    if (this.repaintTimer) return;
+    if (this.repaintTimer || this.motionPreference?.matches) return;
     this.repaintTimer = setTimeout(() => {
       this.repaintTimer = null;
       if (this.map && this.stateController.isEnabled()) this.map.triggerRepaint();
@@ -943,6 +946,7 @@ export class VolumetricWeatherLayer {
   }
 
   onRemove(map, gl) {
+    this.motionPreference?.removeEventListener('change', this.onMotionChange);
     if (this.repaintTimer) {
       clearTimeout(this.repaintTimer);
       this.repaintTimer = null;
@@ -960,11 +964,14 @@ export class VolumetricWeatherLayer {
 }
 
 /**
- * Reactive controller managing live API telemetry polling, simulator overrides,
+ * Reactive controller managing live API telemetry polling, optional radar,
  * and WebGL custom layer lifecycle.
  */
 export function createWeatherEngineController(map, onStateChange = null) {
   let enabled = true;
+  let radarEnabled = false;
+  let radarAbort = null;
+  let radarRefreshQueued = false;
   let dirty = true;
   let livePayload = null;
   let activeNodes = [];
@@ -984,7 +991,7 @@ export function createWeatherEngineController(map, onStateChange = null) {
     installingRadar = true;
     try {
     const age = radarAt ? (Date.now() - Date.parse(radarAt)) / 1000 : Infinity;
-    if (!radarFrame || age > 1200 || age < -300) {
+    if (!radarEnabled || !radarFrame || age > 1200 || age < -300) {
       if (map.getLayer('live-rain-radar')) map.removeLayer('live-rain-radar');
       if (map.getSource('live-rain-radar')) map.removeSource('live-rain-radar');
       return;
@@ -1006,9 +1013,10 @@ export function createWeatherEngineController(map, onStateChange = null) {
   }
 
   async function refreshRadar() {
-    if (!map || removed || radarFetching) return;
+    if (!map || removed || !radarEnabled || radarFetching) return;
     radarFetching = true;
     const abort = new AbortController();
+    radarAbort = abort;
     const timeout = setTimeout(() => abort.abort(), 15000);
     try {
       const response = await fetch(`${WEATHER_API_BASE_URL}/api/v1/weather/radar`, {
@@ -1018,7 +1026,7 @@ export function createWeatherEngineController(map, onStateChange = null) {
       const data = await response.json();
       const frame = data.latest_frame;
       if (!frame || !Number.isFinite(frame.time) || !frame.tile_url?.startsWith('https://tilecache.rainviewer.com/')) throw new Error('Invalid radar');
-      if (removed) return;
+      if (removed || !radarEnabled) return;
       radarFrame = frame;
       radarAt = new Date(frame.time * 1000).toISOString();
     } catch (_) {
@@ -1026,9 +1034,11 @@ export function createWeatherEngineController(map, onStateChange = null) {
     } finally {
       clearTimeout(timeout);
       radarFetching = false;
+      radarAbort = null;
       if (!removed) {
         installRadar();
         notify();
+        if (radarEnabled && radarRefreshQueued) { radarRefreshQueued = false; refreshRadar(); }
       }
     }
   }
@@ -1053,7 +1063,8 @@ export function createWeatherEngineController(map, onStateChange = null) {
     const altitude = computeAltitudeCloudFade(zoom);
     return {
       status,
-      radarAt: radarAt && Date.now() - Date.parse(radarAt) <= 1200000 ? radarAt : null,
+      radarEnabled,
+      radarAt: radarEnabled && radarAt && Date.now() - Date.parse(radarAt) <= 1200000 ? radarAt : null,
       isLive: status === 'live',
       validAt: Number.isFinite(validAt) ? new Date(validAt).toISOString() : null,
       source: livePayload?.source || 'Open-Meteo / KNMI HARMONIE model',
@@ -1133,18 +1144,34 @@ export function createWeatherEngineController(map, onStateChange = null) {
       return wasDirty;
     },
     setEnabled,
+    setRadarEnabled(value) {
+      radarEnabled = Boolean(value);
+      if (!radarEnabled) { radarRefreshQueued = false; radarAbort?.abort(); }
+      else if (radarFetching && radarAbort?.signal.aborted) radarRefreshQueued = true;
+      installRadar();
+      if (radarEnabled) refreshRadar();
+      notify();
+    },
     getState: computeSummaryState,
     refreshLive: async () => { await Promise.allSettled([fetchLiveWeatherGrid(), refreshRadar()]); }
   };
 
+  let orderedWeatherLayer = null;
+  let orderedBeforeLayer = null;
   function ensureTopmostWeatherLayer() {
     if (!map || !map.getStyle() || !map.getLayer(WEATHER_LAYER_ID)) return;
-    const layers = map.getStyle().layers;
-    if (layers && layers.length > 0 && layers[layers.length - 1].id !== WEATHER_LAYER_ID) {
-      try {
-        map.moveLayer(WEATHER_LAYER_ID);
-      } catch (_) {}
-    }
+    const layers = map.getStyle().layers || [];
+    const overlay = layers.find(layer => layer.id.startsWith('explore-') || layer.id.startsWith('explorer-selection'));
+    // MapLibre 2.x excludes custom layers from getStyle().layers. Comparing
+    // serialized indices would reorder on every styledata event indefinitely.
+    const weatherLayer = map.getLayer(WEATHER_LAYER_ID);
+    const before = overlay?.id || null;
+    if (orderedWeatherLayer === weatherLayer && orderedBeforeLayer === before) return;
+    orderedWeatherLayer = weatherLayer;
+    orderedBeforeLayer = before;
+    try { map.moveLayer(WEATHER_LAYER_ID, before || undefined); }
+    catch (_) { orderedWeatherLayer = null; }
+
   }
 
   async function attachLayer() {
@@ -1196,6 +1223,7 @@ export function createWeatherEngineController(map, onStateChange = null) {
     map.once('remove', () => {
       removed = true;
       if (pollInterval) clearInterval(pollInterval);
+      radarAbort?.abort();
       map.off('load', refreshRadar);
       map.off('load', attachLayer);
       map.off('styledata', attachLayer);

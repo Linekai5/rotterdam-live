@@ -29,6 +29,8 @@ redisdata/
 
 # OS & Editors
 .DS_Store
+# Google Drive's generated upload cache
+/.tmp.driveupload/
 Thumbs.db
 .vscode/
 .idea/
