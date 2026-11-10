@@ -1,6 +1,6 @@
 # Rotterdam Live — City Explorer & Live Weather Architecture
 
-Architecture revision 2.5.0 · 5 November 2026 · Development branch: `malidev`
+Architecture revision 2.6.0 · 10 November 2026 · Development branch: `malidev`
 
 This public overview describes the current development implementation. The session
 changes have not been deployed to production. The full repository specification is
@@ -24,11 +24,13 @@ Polling cadence is separate from the model valid time and provider update cadenc
 
 ## On-demand city explorer
 
-The charcoal explorer has Map layers, In view and Map sections, with muted sage,
-sand and clay accents. Every optional data layer starts off. Users can select
+The graphite explorer uses self-hosted Instrument Sans, a custom bridge mark,
+warm ivory SVG symbols and restrained sage accents. Map layers, In view and Map
+sections have coordinated tab, panel, filter and selection transitions, with
+reduced motion support. Every optional data layer starts off. Users can select
 events, neighbourhoods, shops, useful facilities, traffic, parking, bridges,
 roadworks, estimated district activity, emergency reports, local news and
-environmental records. City pulse is a model estimate, not a count of people;
+environmental records, plus mapped camera locations. City pulse is a model estimate, not a count of people;
 directories and annual statistics are labelled separately from current reports.
 
 Selected layers use the existing GeoJSON API, with two explorer requests at a
@@ -45,6 +47,24 @@ Aerial, Night and Atlas maps retain selected layers and preferences. The desktop
 panel can collapse; mobile uses an explorer sheet and a location sheet. Short
 panel/camera transitions respect reduced motion, including freezing idle cloud
 animation. No AI supervisor is mounted or requested.
+
+Map points use original category/subtype SVGs, rasterized locally at 2× for
+MapLibre. Tickets, concerts, bridges, cameras, parking, shops, water taps, toilets,
+AEDs and other places have distinct glyphs. Cluster plaques show their category
+and count. Hover previews and selected-record metrics connect the map to details.
+MapLibre geometry getters are copied explicitly so a selected marker keeps its
+location. Mobile controls have expanded touch targets and a conditional scroll cue.
+
+Camera records now require explicit OpenStreetMap camera tags. Inferred cameras
+at ordinary businesses and placeholder public streams were retired. The current
+directory provides source links and mapped locations, not public video footage.
+An unavailable upstream refresh preserves prior sourced records. Camera public-feed
+filters are disjoint, and retail bounds use the shared coordinate validator.
+
+Browser API requests use the serving origin via a shared apiBase module. Vite
+proxies them on 5173; the local built Docker preview on 8080 proxies them through
+its Nginx to FastAPI on 8000. This removes the built localhost frontend's previous
+cross-origin port-8000 failure. An explicit VITE_API_BASE_URL override remains.
 
 ## Weather contracts
 
@@ -119,10 +139,10 @@ decorative clouds over a clear live-model snapshot.
 
 ## Session verification and remaining work
 
-The November frontend checks passed: ten unit/spatial tests, eighteen browser
-checks (explorer, mobile, map/ocean lifecycle and clouds), and the Vite build.
-The earlier October weather session also passed 32 relevant backend weather/crowd
-tests; the backend suite was not rerun as part of the frontend-only work.
+The 10 November checks passed: fourteen unit/spatial tests, twenty-three browser
+checks (including the actual built Docker preview), the full backend suite of
+111 tests, and the Vite/Docker builds. All thirteen selected map layers loaded
+actual API data through the UI, with no optional datasets requested on startup.
 The browser regression checks a compiled shader and actual framebuffer pixels,
 including cloud bodies and gaps; layer registration alone is insufficient.
 Overhead/tilted screenshots and desktop/mobile layout were inspected locally.

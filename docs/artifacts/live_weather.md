@@ -49,7 +49,9 @@ verification. No claim of measured forecast accuracy is made by this implementat
 
 The full session explanation, cache/status contract, renderer details, validation
 results and remaining limitations are recorded in the root
-`rotterdam_live_api_architecture.txt` (architecture revision 2.5.0, updated
-5 November with the on-demand frontend explorer). Work is carried
+`rotterdam_live_api_architecture.txt` (architecture revision 2.6.0, updated
+10 November with custom SVG map symbols, frontend polish and same-origin built
+preview/API routing). The existing cloud renderer remains enabled on Aerial;
+source freshness and model limitations are unchanged. Work is carried
 on `malidev`, including the earlier feature-branch history. Production remains
 unchanged by this development work.

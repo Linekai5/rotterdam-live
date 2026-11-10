@@ -30,6 +30,20 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    # Same-origin API access works in the local Docker preview as well as
+    # behind the production gateway. Preserve the original request path.
+    location /api/ {
+        proxy_pass http://api:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /health {
+        proxy_pass http://api:8000;
+        proxy_set_header Host $host;
+    }
+
     location / {
         try_files $uri $uri/ /index.html;
     }

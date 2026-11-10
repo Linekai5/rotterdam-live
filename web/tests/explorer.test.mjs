@@ -2,12 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MAP_DATASETS, DATASET_BY_ID, normalizeFeature, featureDetails, featureAction, featureDescription, geometryBounds, intersectsBounds, datasetParameters, isPrimaryEvent } from '../src/lib/explorerData.js';
 import { createMapDataController } from '../src/lib/mapDataController.js';
+const createController = (map, onChange, onSelect, onHover) => createMapDataController(map, onChange, onSelect, onHover, { decodeSymbol: async () => ({ width: 1, height: 1, data: new Uint8Array(4) }) });
 
 const point = (id = 'one', x = 4.48, y = 51.92) => ({ type: 'Feature', id, geometry: { type: 'Point', coordinates: [x, y] }, properties: { title: id } });
 const response = features => ({ ok: true, json: async () => ({ type: 'FeatureCollection', features }) });
 const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 class FakeMap {
-  constructor() { this.sources = new Map(); this.layers = new Map(); this.events = new Map(); }
+  constructor() { this.sources = new Map(); this.layers = new Map(); this.images = new Map(); this.events = new Map(); }
   getBounds() { return { getWest: () => 4.4, getSouth: () => 51.88, getEast: () => 4.6, getNorth: () => 51.97 }; }
   getStyle() { return { layers: [...this.layers.values()] }; }
   getSource(id) { return this.sources.get(id); }
@@ -17,6 +18,10 @@ class FakeMap {
   addLayer(layer) { this.layers.set(layer.id, layer); }
   removeLayer(id) { this.layers.delete(id); }
   setPaintProperty() {}
+  setLayoutProperty(id, property, value) { this.layers.get(id).layout[property] = value; }
+  hasImage(id) { return this.images.has(id); }
+  addImage(id, data) { this.images.set(id, data); }
+  removeImage(id) { this.images.delete(id); }
   on(event, handler) { if (!this.events.has(event)) this.events.set(event, new Set()); this.events.get(event).add(handler); }
   off(event, handler) { this.events.get(event)?.delete(handler); }
   fire(event, data = {}) { this.events.get(event)?.forEach(handler => handler(data)); }
@@ -32,6 +37,29 @@ test('provider records preserve zero/false metrics, parse map properties, and re
   assert.equal(featureAction(record), null);
   assert.equal(featureDescription(record), 'Safe & clear');
   assert.equal(featureAction({ properties: { website: 'https://example.com/info' } }).href, 'https://example.com/info');
+  const mapHit = Object.create({ get geometry() { return { type: 'Point', coordinates: [4.48, 51.92] }; } });
+  mapHit.properties = { title: 'Erasmusbrug', __dataset: 'bridges' };
+  const selection = normalizeFeature(mapHit);
+  assert.deepEqual(selection.geometry, { type: 'Point', coordinates: [4.48, 51.92] });
+  assert.equal(intersectsBounds(selection, [4.4, 51.88, 4.6, 51.97]), true);
+});
+test('changing a facility filter updates its cluster glyph as well as its point records', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async url => {
+    const subcategory = new URL(url, 'http://localhost').searchParams.get('subcategory');
+    return response([{ ...point(subcategory), properties: { title: subcategory, subcategory } }]);
+  };
+  const map = new FakeMap();
+  const controller = createController(map, () => {}, () => {});
+  try {
+    controller.toggle('amenities');
+    await settle();
+    assert.equal(map.getLayer('explore-amenities-cluster').layout['icon-image'], 'city-mark-cluster-water');
+    controller.setFilters('amenities', { subcategory: 'toilet' });
+    await settle();
+    assert.equal(map.getLayer('explore-amenities-cluster').layout['icon-image'], 'city-mark-cluster-toilet');
+    assert.equal(map.getSource('explore-amenities').data.features[0].properties.__marker, 'city-mark-toilet');
+  } finally { controller.destroy(); globalThis.fetch = original; }
 });
 test('viewport and API parameters respect source scope and allowed filters', () => {
   assert.deepEqual(geometryBounds({ type: 'LineString', coordinates: [[4.4, 51.9], [4.5, 51.95]] }), [4.4, 51.9, 4.5, 51.95]);
@@ -53,7 +81,7 @@ test('optional layers start idle, cap concurrent fetches, cancel on removal and 
   });
   const map = new FakeMap();
   let state;
-  const controller = createMapDataController(map, value => state = value, () => {});
+  const controller = createController(map, value => state = value, () => {});
   try {
     assert.equal(pending.length, 0);
     controller.toggle('events'); controller.toggle('parking'); controller.toggle('bridges');
@@ -82,22 +110,24 @@ test('filter changes discard superseded results and style replacement restores s
   const pending = [];
   globalThis.fetch = (url, options) => new Promise(resolve => pending.push({ url, signal: options.signal, resolve }));
   const map = new FakeMap(); let state;
-  const controller = createMapDataController(map, value => state = value, () => {});
+  const controller = createController(map, value => state = value, () => {});
   try {
     controller.toggle('amenities');
     controller.setFilters('amenities', { subcategory: 'toilet' });
     assert.equal(pending[0].signal.aborted, true);
-    pending[1].resolve(response([point('toilet')]));
+    pending[1].resolve(response([{ ...point('toilet'), properties: { title: 'toilet', subcategory: 'toilet' } }]));
     await settle();
-    pending[0].resolve(response([point('water')]));
+    pending[0].resolve(response([{ ...point('water'), properties: { title: 'water', subcategory: 'water_tap' } }]));
     await settle();
     assert.equal(state.amenities.features[0].id, 'toilet');
     assert.match(pending[1].url, /subcategory=toilet/);
     const requestCount = pending.length;
-    map.layers.clear(); map.sources.clear(); map.fire('styledata');
+    map.layers.clear(); map.sources.clear(); map.images.clear(); map.fire('styledata');
     assert.equal(map.getSource('explore-amenities'), undefined, 'style listeners must not mutate an in-progress render');
     await settle();
     assert.equal(map.getSource('explore-amenities').data.features[0].id, 'toilet');
+    assert.equal(map.getLayer('explore-amenities-point').type, 'symbol');
+    assert.equal(map.hasImage('city-mark-toilet'), true);
     assert.equal(pending.length, requestCount);
   } finally { controller.destroy(); globalThis.fetch = original; }
 });

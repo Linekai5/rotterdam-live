@@ -1,11 +1,11 @@
 # Rotterdam Live Platform — Master Architectural Specification & Operational Status
 
 > [!NOTE]
-> **Architecture Revision:** 2.5.0 — 5 November 2026 (On-Demand City Explorer, Responsive Dark Interface, Map Filters & Live Weather; application package versions are unchanged)
+> **Architecture Revision:** 2.6.0 — 10 November 2026 (Frontend Design Review, Bespoke SVG Map Symbols, Functional Filter Audit & Source-Backed Camera Directory; application package versions are unchanged)
 > **Environment:** Hetzner Cloud Linux VPS (`${PUBLIC_BIND_ADDRESS}` / Tailscale `${PRIVATE_BIND_ADDRESS}`)
 > **Unified Repository:** [`github.com/Linekai5/rotterdam-live`](https://github.com/Linekai5/rotterdam-live) (`malidev` development branch; `main` is the deployment branch)
 > **Interactive Documentation:** `https://rotterdamlive.nl/docs` | `https://rotterdamlive.nl/redoc`
-> **Verification Scope:** Frontend and weather changes were implemented and checked locally on ports 5173/8000. They have not been deployed to production in this session. Historical infrastructure figures elsewhere in this document are a platform baseline, not a fresh production audit. See sections 10–13 for validation and limitations.
+> **Verification Scope:** Frontend and API changes were implemented and checked locally on ports 5173/8000. They have not been deployed to production in this session. Historical infrastructure figures elsewhere in this document are a platform baseline, not a fresh production audit. See sections 10–14 for validation and limitations.
 
 ---
 
@@ -370,6 +370,18 @@ The `web/` Svelte 5 SPA is bundled by Vite 7. `App.svelte` mounts `MapComponent.
 
 ## 10. Automated Testing Suite & CI/CD Pipelines
 
+### Latest Full Checks — 10 November 2026
+
+| Check | Result | Scope |
+| :--- | :--- | :--- |
+| Full backend `python -m pytest -q` in `rotterdam_dev_api` | 111 passed | Includes source-backed camera ingestion, filter/retirement contracts, bbox validation and district source joins. |
+| Frontend `npm --prefix web test` | 14 passed | Geometry/weather, request concurrency, source races, SVG sprite lifecycle and getter-backed map selection. |
+| Browser suite with `WEB_PREVIEW_ORIGIN=http://localhost:8080` | 23 passed | Vite workflows plus an actual built Docker preview checking same-origin API traffic; includes rendered glyphs, style restoration, mobile and clouds. |
+| Vite build / local Docker web build | Passed | Local preview updated on 8080; Nginx forwards API/health requests to FastAPI. |
+| Live frontend audit | All 13 layers loaded | No optional startup requests, no captured API HTTP failures or uncaught page errors; no mobile horizontal overflow. |
+
+Screenshots, review notes and exact commands: `docs/artifacts/frontend-review/README.md`. These results establish software behaviour in the local stack, not upstream data accuracy or a production deployment.
+
 ### Frontend Explorer Checks — 5 November 2026
 
 | Command / check | Recorded result | What it establishes |
@@ -379,7 +391,7 @@ The `web/` Svelte 5 SPA is bundled by Vite 7. `App.svelte` mounts `MapComponent.
 | `npm --prefix web run build` | Passed | Production Svelte/Vite bundle builds. |
 | Local API / visual review | Completed at 5173 → 8000 | Actual event, mobility, crowd, directory and district-profile formats inspected; desktop/mobile layouts reviewed. Optional datasets and radar are absent from initial browser requests. |
 
-No backend code changed for the explorer. The backend test results below belong to the earlier weather session; they were not rerun as a new full-backend audit. Browser fixtures verify deterministic software behaviour; local live-feed checks do not certify upstream accuracy or continuous availability.
+No backend code changed for the original 5 November explorer. The latest 10 November API fixes and checks are recorded in section 14. Browser fixtures verify deterministic software behaviour; local live-feed checks do not certify upstream accuracy or continuous availability.
 
 ### Weather Session Checks — 28 October 2026
 
@@ -545,6 +557,7 @@ Every row below starts disabled. Enabling a row is the action that requests its 
 | Traffic | `/mobility/traffic` | Corridor lines coloured by congestion; speeds and travel delays in details. |
 | Parking | `/mobility?subcategory=parking` | Clustered locations; availability, capacity and occupancy when supplied. Zero spaces remains zero. |
 | Bridges | `/mobility?subcategory=bridge` | Opening and road-traffic information when supplied. |
+| Cameras | `/amenities/cameras` | Source-backed OSM camera locations, with traffic/surveillance/speed filters and mapped-source links. This source does not provide public footage. Added 10 November. |
 | Roadworks | `/mobility/roadworks` | Work locations and dates. |
 | City pulse | `/crowd/live` | District choropleth and legend; explicitly an estimated activity index, not a count of people. |
 | Emergency reports | `/live?category=emergency` | Geolocated regional dispatch reports. |
@@ -570,3 +583,37 @@ Buttons, switches and filters have accessible names and visible keyboard focus. 
 The frontend uses the existing API and its upstream freshness policies. Browser refresh time is not a new source observation; a model estimate, directory or annual figure does not become live because it is fetched again. Bounding-box intersection for the results list is conservative for district polygons, and 150-record caps can omit records until the view is narrowed. Existing MapLibre/weather bundle size and rendering cost remain; no universal frame-rate or Awwwards-level quality claim is made.
 
 Development work belongs on `malidev`. Earlier feature-branch history is preserved there, and `feat/live-spatial-weather` has been removed locally and remotely. No merge to `main` or production deployment is part of this work.
+
+---
+
+## 14. Frontend Design and Filter Review — 10 November 2026
+
+### 14.1 Findings and Visual Direction
+
+The browser review found an oversized introduction, small low-contrast interface text, generic circular markers, abrupt filter expansion, and little visual connection between the layer list, map and selected record. Before/after captures are stored in `docs/artifacts/frontend-review/`.
+
+The new interface uses self-hosted Instrument Sans (OFL license included), graphite surfaces, warm ivory and restrained sage accents. A custom Erasmusbrug-inspired mark, clipped-corner icon plaques, a compact heading and consistent rules create a map-focused visual language. Essential controls use larger text; category navigation groups Discover, Move and City without making requests. Selected layers retain individual filters and source labels. A scroll cue appears only while more content remains below the viewport.
+
+Motion now coordinates the tab underline, directional panel entry, filter expansion/collapse, staggered record entry, selected-record reveal and camera navigation. Hovering a map symbol previews the actual record without fetching more data. Tooltip placement respects the viewport edges. Mobile sheets, 44px category targets, expanded switch hit regions, 44px close buttons, keyboard access and reduced motion were reviewed at 1512/1200/390/320px widths. The original volumetric renderer remains enabled by default on Aerial; the weather card was restyled, not replaced with fabricated conditions.
+
+### 14.2 Shared SVG Symbol System
+
+`web/src/lib/mapSymbols.js` supplies original SVG paths shared by `ExplorerIcon.svelte` and map symbols. Ticket, concert, festival, theatre, exhibition, football, bridge, camera, parking, shop, bakery, pharmacy, water tap, toilet, AED, charging, news, emergency, environment and works drawings replace generic point circles. Traffic corridors and district areas retain the appropriate line/polygon geometry.
+
+MapLibre 2.x receives locally rasterized 2× sprites from these SVGs. Only glyphs required by enabled data are decoded; cached pixels are restored after style changes. Cluster plaques display a category glyph plus their count, including changes to facility subtypes. Selected markers use a bracketed version of their actual glyph. Asynchronous decoding cannot mutate a disposed map; source requests still use the existing two-request queue and cancellation/revision safeguards.
+
+### 14.3 Functional and Source-Quality Fixes
+
+* **Marker clicks:** MapLibre's feature geometry is a prototype getter, so object spread discarded it. `normalizeFeature` now copies geometry explicitly. Actual marker selection retains its map location, highlight and Show on map action instead of reporting an in-bounds location as outside the map. A browser regression clicks a rendered glyph and verifies selected-source geometry.
+* **Camera filters:** Added the camera directory to the UI. Backend public-feed true/false predicates are now disjoint and ignore empty URL strings. Camera response cache keys were versioned to avoid old filtered results. The current mapped source supplies no public video; the UI provides source links and location filters rather than promising live streams.
+* **Camera ingestion:** Removed inferred devices at ordinary businesses and placeholder webcam URLs. Both camera ingestion entry points now use explicit OSM camera/surveillance/speed-camera tags. Provider failure preserves prior sourced records instead of creating cameras. Local repair retired 8,025 inferred, synthetic or duplicate rows and retained 778 mapped locations; rows remain in the database for audit. Overpass timed out during the refresh, so these are retained directory records, not newly verified operational cameras. A second repair retired zero records.
+* **Repeatable repair:** `docker exec rotterdam_dev_api python scripts/repair_camera_directory.py` applies the same idempotent cleanup used before worker camera refreshes. The local worker was restarted with the corrected ingestor. Production was not changed.
+* **Retail filtering:** The retail route now validates bounding boxes using the shared validator before cache access or SQL, rejecting reversed, out-of-range and nonfinite coordinates consistently.
+* **Built frontend connection:** The built localhost frontend previously bypassed its serving origin and called port 8000 directly; the API rejected the local port-8080 origin. `apiBase.js` now centralizes browser requests on the serving origin, with an explicit `VITE_API_BASE_URL` override. The Docker web Nginx forwards `/api/` and `/health` to the API service, matching Vite's proxy. A browser test against the actual built preview verifies that weather/traffic requests stay on port 8080 and health succeeds without CORS exceptions.
+* **Detail lifecycle:** Aborted district-profile requests cannot set failure state on a newly selected record. Failed map-style changes retain the previous mode and URL. District profile tests compare the exact current database source rows instead of freezing a housing count that changes with ingestion.
+
+### 14.4 Verification and Limits
+
+The route-by-route live audit, geometry types, source outage and repair evidence are recorded in `docs/artifacts/map_feed_audit.md`. All 13 map routes returned populated GeoJSON locally. Empty results for a particular time window, category or viewport are explained separately from a failed request. Optional layers still make no requests at startup, and radar remains opt-in. Checks cover software behaviour and source integrity; they do not certify that upstream sensors, mapped cameras or model estimates match physical conditions at every instant.
+
+Final automated check results are recorded in the frontend review artifact. Changes are committed to `malidev`; this review does not deploy `main` or production. The local Docker web image was rebuilt on port 8080. Both that built preview and Vite on port 5173 talk to FastAPI on port 8000 through their same-origin proxy.

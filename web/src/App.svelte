@@ -7,6 +7,7 @@
 </main>
 
 <style>
+  @font-face { font-family: 'Instrument Sans'; src: url('/fonts/InstrumentSans.ttf') format('truetype'); font-weight: 400 700; font-display: swap; }
   :global(html, body, #app) {
     margin: 0;
     padding: 0;
@@ -14,6 +15,7 @@
     height: 100%;
     overflow: hidden;
     background-color: #082632;
+    font-family: 'Instrument Sans', 'Helvetica Neue', Arial, sans-serif;
   }
 
   main {
