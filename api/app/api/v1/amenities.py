@@ -112,7 +112,8 @@ async def get_camera_stats(
     session: AsyncSession = Depends(get_db),
 ):
     """
-    Get aggregated counts of verified cameras in Rotterdam across all structured categories and districts.
+    Count active mapped camera-location records by category and district.
+    These are directory counts, not verified operational-device counts.
     """
     cache_key = "amenities:cameras:stats"
     redis = await get_redis_client()
@@ -143,7 +144,7 @@ async def get_surveillance_cameras(
     ),
     has_live_feed: Optional[bool] = Query(
         None,
-        description="Filter for cameras with direct viewing access (live video or snapshot stream)",
+        description="Filter source metadata indicating a public stream/snapshot; availability is not probed here",
     ),
     district: Optional[str] = Query(None, description="Filter by Rotterdam district"),
     bbox: Optional[str] = Query(None, description="Bounding box: min_lon,min_lat,max_lon,max_lat"),
@@ -152,12 +153,13 @@ async def get_surveillance_cameras(
     session: AsyncSession = Depends(get_db),
 ):
     """
-    Unified camera endpoint for Rotterdam outdoor and commercial security cameras.
-    Returns strict RFC 7946 GeoJSON FeatureCollection with sub-millisecond PostGIS GiST filtering.
-    If camera_type is omitted, all verified cameras across all categories are returned.
+    Mapped camera-location directory. An OSM camera tag is not an operational
+    check or a promise of public video access; see each record's source metadata.
+    Returns an RFC 7946 GeoJSON FeatureCollection using PostGIS bbox filtering and caching.
+    If camera_type is omitted, all active mapped camera locations are returned.
     """
     bbox_coords = parse_bbox_param(bbox)
-    cache_key = f"amenities:cameras:{camera_type}:{has_live_feed}:{district}:{bbox}:{limit}:{offset}"
+    cache_key = f"amenities:cameras:v2:{camera_type}:{has_live_feed}:{district}:{bbox}:{limit}:{offset}"
     redis = await get_redis_client()
 
     if redis:
@@ -197,11 +199,12 @@ async def get_live_viewable_cameras(
     session: AsyncSession = Depends(get_db),
 ):
     """
-    Dedicated endpoint for cameras with direct public viewing access (live video streams and recurring snapshot feeds).
-    Includes Rijkswaterstaat motorway cameras, Erasmusbrug, Maastunnel, Euromast, and harbor webcams.
+    Filter records whose source supplies public-footage metadata.
+    The current OSM location directory supplies no verified streams, so this
+    collection may be empty. External footage is not fetched or checked here.
     """
     bbox_coords = parse_bbox_param(bbox)
-    cache_key = f"amenities:cameras:live:{district}:{bbox}:{limit}:{offset}"
+    cache_key = f"amenities:cameras:live:v2:{district}:{bbox}:{limit}:{offset}"
     redis = await get_redis_client()
 
     if redis:
@@ -282,7 +285,8 @@ async def get_commercial_cameras(
     session: AsyncSession = Depends(get_db),
 ):
     """
-    Commercial company security cameras (supermarkets, retail malls, banks, ATMs, parking garages, fuel stations, and APV mandated high-risk stores).
+    Legacy commercial-category filter. Venue type alone is not proof of a camera;
+    the current OSM directory may return an empty collection for this category.
     """
     return await query_city_amenities(
         session=session,
@@ -304,7 +308,8 @@ async def get_police_surveillance_cameras(
     session: AsyncSession = Depends(get_db),
 ):
     """
-    Police and municipal surveillance camera poles (Article 151c Gemeentewet and public security CCTV).
+    Camera locations classified as surveillance by the mapped source.
+    This does not establish an operator, legal mandate or current device status.
     """
     return await query_city_amenities(
         session=session,
@@ -326,7 +331,8 @@ async def get_transit_cameras(
     session: AsyncSession = Depends(get_db),
 ):
     """
-    RET Metro station access portals, train station hubs, and secure transport facility cameras.
+    Legacy transit-category filter. A station or access portal alone is not
+    proof of a camera, so the current directory may return an empty collection.
     """
     return await query_city_amenities(
         session=session,
@@ -348,7 +354,8 @@ async def get_traffic_monitoring_cameras(
     session: AsyncSession = Depends(get_db),
 ):
     """
-    Rijkswaterstaat and municipal arterial traffic flow monitoring cameras (A13, A15, A16, A20, S100 ring, tunnels).
+    Mapped camera locations classified as traffic-related by their source.
+    No public video access or operational status is implied.
     """
     return await query_city_amenities(
         session=session,
@@ -370,7 +377,8 @@ async def get_anpr_cameras(
     session: AsyncSession = Depends(get_db),
 ):
     """
-    Speed enforcement cameras (flitspalen), flexflitsers, and low-emission zone (milieuzone) ANPR portals.
+    Mapped speed/enforcement-camera category. This legacy category name does
+    not verify that every recorded device performs number-plate recognition.
     """
     return await query_city_amenities(
         session=session,
@@ -392,7 +400,8 @@ async def get_infrastructure_cameras(
     session: AsyncSession = Depends(get_db),
 ):
     """
-    Bridge watchman posts (BrugwachtersVerblijven), movable bridges, lock complexes, and tunnel portals.
+    Legacy infrastructure-category filter. A bridge, lock or tunnel alone is
+    not proof of a camera, so this collection may be empty.
     """
     return await query_city_amenities(
         session=session,

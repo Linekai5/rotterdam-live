@@ -1,12 +1,13 @@
 import { API_BASE_URL } from './liveLayers.js';
 import { MAP_DATASETS, DATASET_BY_ID, EMPTY_COLLECTION, normalizeFeature, intersectsBounds, datasetParameters, isPrimaryEvent } from './explorerData.js';
+import { createMapSymbolRegistry, markerKind, markerImageId, withMapSymbol } from './mapSymbols.js';
 export { MAP_DATASETS } from './explorerData.js';
 
 const LAYER_SUFFIXES = ['fill', 'line', 'point', 'cluster', 'count'];
 const CACHE_TTL = 45000;
 const MAX_REQUESTS = 2;
 
-export function createMapDataController(map, onChange, onSelect) {
+export function createMapDataController(map, onChange, onSelect, onHover = () => {}, { decodeSymbol } = {}) {
   const entries = new Map();
   const cache = new Map();
   const queue = new Set();
@@ -16,8 +17,10 @@ export function createMapDataController(map, onChange, onSelect) {
   let installQueued = false;
   let viewportTimer;
   let hoverFrame;
+  let hoverEvent;
   let running = 0;
   let selection = null;
+  const symbols = createMapSymbolRegistry(map, styleChanged, decodeSymbol);
   const bounds = () => {
     const b = map.getBounds();
     return [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
@@ -44,7 +47,7 @@ export function createMapDataController(map, onChange, onSelect) {
   function addLayer(layer) {
     // Data markers and their labels remain legible above the visual cloud canopy.
     if (map.getLayer(layer.id)) return;
-    const opacity = ['circle-opacity', 'line-opacity', 'fill-opacity', 'text-opacity'].find(key => layer.paint?.[key] != null);
+    const opacity = ['icon-opacity', 'line-opacity', 'fill-opacity', 'text-opacity'].find(key => layer.paint?.[key] != null);
     if (!opacity || reducedMotion()) { map.addLayer(layer); return; }
     const target = layer.paint[opacity];
     map.addLayer({ ...layer, paint: { ...layer.paint, [opacity]: 0, [`${opacity}-transition`]: { duration: 220 } } });
@@ -56,12 +59,13 @@ export function createMapDataController(map, onChange, onSelect) {
   }
   function installSelection() {
     if (!selection) return;
+    if (selection.geometry.type === 'Point' && !symbols.ensure(markerKind(selection), true)) return;
     const source = 'explorer-selection';
     if (map.getSource(source)) map.getSource(source).setData({ type: 'FeatureCollection', features: [selection] });
     else {
       map.addSource(source, { type: 'geojson', data: { type: 'FeatureCollection', features: [selection] } });
       addLayer({ id: `${source}-area`, type: 'line', source, filter: ['!=', ['geometry-type'], 'Point'], paint: { 'line-color': '#e7e6da', 'line-width': 3, 'line-opacity': 0.9 } });
-      addLayer({ id: `${source}-point`, type: 'circle', source, filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-color': '#e5e6d6', 'circle-radius': 8, 'circle-stroke-color': '#232a20', 'circle-stroke-width': 3 } });
+      addLayer({ id: `${source}-point`, type: 'symbol', source, filter: ['==', ['geometry-type'], 'Point'], layout: { 'icon-image': ['get', '__selectedMarker'], 'icon-size': 1.02, 'icon-anchor': 'bottom', 'icon-offset': [0, 4], 'icon-allow-overlap': true, 'icon-ignore-placement': true }, paint: { 'icon-opacity': 1 } });
     }
   }
   function install() {
@@ -73,7 +77,17 @@ export function createMapDataController(map, onChange, onSelect) {
         const source = `explore-${id}`;
         const definition = DATASET_BY_ID[id];
         const points = !definition.geometry;
-        if (!map.getSource(source)) map.addSource(source, { type: 'geojson', data: entry.data, ...(points ? { cluster: true, clusterRadius: 38, clusterMaxZoom: 13 } : {}) });
+        const clusterKind = `cluster-${markerKind({ properties: { __dataset: id, ...entry.filters } })}`;
+        const kinds = new Set(entry.data.features.filter(feature => feature.geometry.type === 'Point').map(markerKind));
+        const imagesReady = [...kinds].map(kind => symbols.ensure(kind)).every(Boolean);
+        const clusterReady = !points || !entry.data.features.length || symbols.ensure(clusterKind);
+        if (!imagesReady || !clusterReady) continue;
+        let mapSource = map.getSource(source);
+        if (!mapSource) {
+          map.addSource(source, { type: 'geojson', data: entry.data, ...(points ? { cluster: true, clusterRadius: 42, clusterMaxZoom: 13 } : {}) });
+          mapSource = map.getSource(source);
+        } else if (entry.installedSource !== mapSource || entry.installedData !== entry.data) mapSource.setData(entry.data);
+        entry.installedSource = mapSource; entry.installedData = entry.data;
         const color = definition.color;
         const thematicColor = id === 'crowd'
           ? ['interpolate', ['linear'], ['coalesce', ['get', 'crowd_index'], 0], 0, '#9dac8c', 40, '#c2b18d', 70, '#b18e79', 100, '#a77670']
@@ -82,10 +96,12 @@ export function createMapDataController(map, onChange, onSelect) {
             : color;
         addLayer({ id: `${source}-fill`, type: 'fill', source, filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': thematicColor, 'fill-opacity': id === 'crowd' ? 0.32 : 0.10, 'fill-opacity-transition': { duration: 250 } } });
         addLayer({ id: `${source}-line`, type: 'line', source, filter: ['!=', ['geometry-type'], 'Point'], layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': thematicColor, 'line-width': id === 'traffic' ? 4 : 1.1, 'line-opacity': 0.85 } });
-        addLayer({ id: `${source}-point`, type: 'circle', source, filter: ['all', ['==', ['geometry-type'], 'Point'], ['!', ['has', 'point_count']]], paint: { 'circle-color': color, 'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 4, 16, 7], 'circle-stroke-color': '#202522', 'circle-stroke-width': 2, 'circle-opacity': 0.94, 'circle-opacity-transition': { duration: 250 } } });
+        addLayer({ id: `${source}-point`, type: 'symbol', source, filter: ['all', ['==', ['geometry-type'], 'Point'], ['!', ['has', 'point_count']]], layout: { 'icon-image': ['get', '__marker'], 'icon-size': ['interpolate', ['linear'], ['zoom'], 10, 0.8, 16, 0.9], 'icon-anchor': 'bottom', 'icon-offset': [0, 4], 'icon-padding': 5, 'symbol-z-order': 'viewport-y' }, paint: { 'icon-opacity': 1, 'icon-opacity-transition': { duration: 250 } } });
         if (points) {
-          addLayer({ id: `${source}-cluster`, type: 'circle', source, filter: ['has', 'point_count'], paint: { 'circle-color': '#2d352d', 'circle-stroke-color': color, 'circle-stroke-width': 1.5, 'circle-radius': ['step', ['get', 'point_count'], 15, 10, 19, 50, 23] } });
-          addLayer({ id: `${source}-count`, type: 'symbol', source, filter: ['has', 'point_count'], layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-size': 10, 'text-font': ['Noto Sans Regular'] }, paint: { 'text-color': '#e1e3d7' } });
+          if (map.getLayer(`${source}-cluster`) && entry.installedClusterKind !== clusterKind) map.setLayoutProperty(`${source}-cluster`, 'icon-image', markerImageId(clusterKind));
+          addLayer({ id: `${source}-cluster`, type: 'symbol', source, filter: ['has', 'point_count'], layout: { 'icon-image': markerImageId(clusterKind), 'icon-size': ['step', ['get', 'point_count'], 0.9, 10, 0.95, 50, 1.08], 'icon-allow-overlap': true, 'icon-ignore-placement': true }, paint: { 'icon-opacity': 1 } });
+          addLayer({ id: `${source}-count`, type: 'symbol', source, filter: ['has', 'point_count'], layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-size': 11, 'text-font': ['Noto Sans Regular'], 'text-offset': [1, -0.1], 'text-allow-overlap': true, 'text-ignore-placement': true }, paint: { 'text-color': '#263025', 'text-opacity': 1 } });
+          entry.installedClusterKind = clusterKind;
         }
       }
       installSelection();
@@ -119,7 +135,7 @@ export function createMapDataController(map, onChange, onSelect) {
         const data = await response.json();
         if (data.type !== 'FeatureCollection' || !Array.isArray(data.features)) throw new Error('The feed returned an unexpected response.');
         const time = Date.now();
-        const features = data.features.filter(feature => feature?.type === 'Feature' && feature.geometry && feature.properties && intersectsBounds(feature, [-180, -90, 180, 90])).map(feature => normalizeFeature(feature, id, time)).filter(feature => id !== 'events' || isPrimaryEvent(feature));
+        const features = data.features.filter(feature => feature?.type === 'Feature' && feature.geometry && feature.properties && intersectsBounds(feature, [-180, -90, 180, 90])).map(feature => withMapSymbol(normalizeFeature(feature, id, time))).filter(feature => id !== 'events' || isPrimaryEvent(feature));
         snapshot = { time, data: { type: 'FeatureCollection', features }, truncated: !definition.citywide && data.features.length >= 150 };
         cache.set(key, snapshot);
         if (cache.size > 32) cache.delete(cache.keys().next().value);
@@ -130,7 +146,6 @@ export function createMapDataController(map, onChange, onSelect) {
       entry.updatedAt = snapshot.time;
       entry.truncated = snapshot.truncated;
       install();
-      map.getSource(`explore-${id}`)?.setData(entry.data);
     } catch (error) {
       if (entries.get(id) === entry && entry.revision === revision && entry.abort === abort && !disposed) {
         entry.status = entry.data ? 'stale' : 'error';
@@ -160,6 +175,7 @@ export function createMapDataController(map, onChange, onSelect) {
   }
   function toggle(id) {
     if (!DATASET_BY_ID[id] || disposed) return;
+    leave();
     if (entries.has(id)) {
       entries.get(id).abort?.abort(); entries.delete(id); queue.delete(id); detach(id);
       if (selection?.properties.__dataset === id) select(null);
@@ -172,6 +188,7 @@ export function createMapDataController(map, onChange, onSelect) {
   function setFilters(id, patch) {
     const entry = entries.get(id);
     if (!entry) return;
+    leave();
     for (const filter of DATASET_BY_ID[id].filters || []) {
       if (filter.options.some(([key]) => key === patch[filter.key])) entry.filters[filter.key] = patch[filter.key];
     }
@@ -181,7 +198,8 @@ export function createMapDataController(map, onChange, onSelect) {
     enqueue(id);
   }
   function select(feature) {
-    selection = feature ? normalizeFeature(feature) : null;
+    leave();
+    selection = feature ? withMapSymbol(normalizeFeature(feature)) : null;
     if (!selection) {
       map.getSource('explorer-selection')?.setData(EMPTY_COLLECTION);
     } else install();
@@ -209,13 +227,24 @@ export function createMapDataController(map, onChange, onSelect) {
   }
   function reducedMotion() { return typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
   function hover(event) {
+    hoverEvent = event;
     if (hoverFrame || typeof requestAnimationFrame === 'undefined') return;
     hoverFrame = requestAnimationFrame(() => {
       hoverFrame = null;
       if (disposed) return;
       const layers = hitLayers();
-      map.getCanvas().style.cursor = layers.length && map.queryRenderedFeatures(event.point, { layers }).length ? 'pointer' : '';
+      const point = hoverEvent.point;
+      const hits = layers.length ? map.queryRenderedFeatures(point, { layers }) : [];
+      const hit = hits.find(feature => feature.geometry.type === 'Point') || hits[0];
+      map.getCanvas().style.cursor = hit ? 'pointer' : '';
+      onHover(hit && !hit.properties.cluster ? { feature: normalizeFeature(hit), point: { x: point.x, y: point.y } } : null);
     });
+  }
+  function leave() {
+    if (hoverFrame) cancelAnimationFrame(hoverFrame);
+    hoverFrame = null; hoverEvent = null;
+    if (map.getCanvas) map.getCanvas().style.cursor = '';
+    onHover(null);
   }
   function refresh() { entries.forEach((_, id) => enqueue(id)); }
   function visibility() { if (document.visibilityState === 'visible') refresh(); }
@@ -224,19 +253,23 @@ export function createMapDataController(map, onChange, onSelect) {
   map.on('styledata', styleChanged);
   map.on('click', click);
   map.on('mousemove', hover);
+  map.on('mouseout', leave);
+  map.on('movestart', leave);
   if (typeof document !== 'undefined') document.addEventListener('visibilitychange', visibility);
   return { toggle, setFilters, select, retry: enqueue, refresh, clear: () => [...entries.keys()].forEach(toggle), destroy() {
     disposed = true; clearTimeout(viewportTimer); clearInterval(poll); queue.clear();
     animationTimers.forEach(clearTimeout); animationTimers.clear();
-    if (hoverFrame) cancelAnimationFrame(hoverFrame);
+    leave();
     entries.forEach(e => e.abort?.abort());
     map.off('moveend', viewportChanged); map.off('styledata', styleChanged); map.off('click', click); map.off('mousemove', hover);
+    map.off('mouseout', leave); map.off('movestart', leave);
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', visibility);
     if (map.getStyle()) {
       [...entries.keys()].forEach(detach);
       for (const id of ['explorer-selection-point', 'explorer-selection-area']) if (map.getLayer(id)) map.removeLayer(id);
       if (map.getSource('explorer-selection')) map.removeSource('explorer-selection');
     }
+    symbols.destroy();
     entries.clear(); cache.clear();
   } };
 }

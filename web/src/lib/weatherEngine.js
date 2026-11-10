@@ -15,6 +15,7 @@
  */
 
 import { ORIGIN, WORLD_ORIGIN, METERS_PER_WORLD, mercator, localPoint, localMatrix } from './oceanGeometry.js';
+import { API_BASE_URL as WEATHER_API_BASE_URL } from './apiBase.js';
 
 export const WEATHER_LAYER_ID = 'rotterdam-volumetric-weather';
 
@@ -26,16 +27,6 @@ const ISLAND_DISTANCE_BOUNDS = [
 ];
 const ISLAND_MAX_DISTANCE = 3200;
 const distanceUrl = new URL('./ocean-distance.png', import.meta.url).href;
-
-const DEFAULT_API_BASE = import.meta.env?.DEV ? '' : typeof window !== 'undefined'
-  ? (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-      ? 'http://localhost:8000'
-      : '')
-  : 'http://localhost:8000';
-
-const WEATHER_API_BASE_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL !== undefined)
-  ? import.meta.env.VITE_API_BASE_URL
-  : DEFAULT_API_BASE;
 
 
 /**

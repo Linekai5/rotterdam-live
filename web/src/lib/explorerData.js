@@ -7,6 +7,7 @@ export const MAP_DATASETS = [
   { id: 'traffic', label: 'Traffic', group: 'Move', icon: 'route', caption: 'Corridor speeds & travel delays', path: '/mobility/traffic', geometry: 'line', color: '#b9a18a', source: 'Traffic corridor feed' },
   { id: 'parking', label: 'Parking', group: 'Move', icon: 'parking', caption: 'Parking locations & availability', path: '/mobility', query: { subcategory: 'parking' }, color: '#9facba', source: 'Parking availability feed' },
   { id: 'bridges', label: 'Bridges', group: 'Move', icon: 'bridge', caption: 'Current bridge information', path: '/mobility', query: { subcategory: 'bridge' }, color: '#b7b9aa', source: 'Bridge opening feed' },
+  { id: 'cameras', label: 'Cameras', group: 'Live city', icon: 'camera', caption: 'Mapped camera locations & sources', path: '/amenities/cameras', color: '#b4bdb8', source: 'OpenStreetMap camera directory', defaults: { camera_type: '' }, filters: [{ key: 'camera_type', label: 'Camera type', options: [['', 'All mapped cameras'], ['traffic', 'Traffic cameras'], ['surveillance', 'Surveillance locations'], ['anpr', 'Speed cameras']] }] },
   { id: 'roadworks', label: 'Roadworks', group: 'Move', icon: 'works', caption: 'Road closures & planned works', path: '/mobility/roadworks', color: '#baa989', source: 'Municipal roadworks feed' },
   { id: 'crowd', label: 'City pulse', group: 'Live city', icon: 'pulse', caption: 'Estimated activity by district', path: '/crowd/live', geometry: 'area', citywide: true, color: '#a6b5a8', source: 'Rotterdam Live activity model' },
   { id: 'emergencies', label: 'Emergency reports', group: 'Live city', icon: 'report', caption: 'Recent regional dispatch reports', path: '/live', query: { category: 'emergency' }, color: '#ba9690', source: 'P2000 dispatch reports' },
@@ -35,7 +36,9 @@ export function normalizeFeature(feature, datasetId = null, fetchedAt = Date.now
       try { properties[key] = JSON.parse(properties[key]); } catch { properties[key] = {}; }
     }
   }
-  return { ...feature, properties: { ...properties, __dataset: datasetId || properties.__dataset || null, __fetchedAt: fetchedAt } };
+  // MapLibre exposes geometry through a prototype getter; object spread alone
+  // drops it and makes a visible marker appear to have no mappable location.
+  return { ...feature, type: 'Feature', geometry: feature.geometry, properties: { ...properties, __dataset: datasetId || properties.__dataset || null, __fetchedAt: fetchedAt } };
 }
 // Ticket providers also return parking/upgrade products. They are not activities
 // to discover on the city map; keep the original source links on actual events.
@@ -53,6 +56,7 @@ export function featureSubtitle(feature) {
   const p = feature?.properties || {};
   if (p.__dataset === 'traffic') return `${formatNumber(p.speed_kmh)} km/h · ${humanize(p.congestion_level) || 'Corridor estimate'}`;
   if (p.__dataset === 'crowd') return `${humanize(p.crowd_status)} · estimated city activity`;
+  if (p.__dataset === 'cameras') return `${p.details?.camera_type === 'anpr' ? 'Speed camera' : humanize(p.details?.camera_type) || 'Mapped camera'} · mapped location`;
   if (p.__dataset === 'parking' && Number.isFinite(p.details?.available_spaces)) return `${formatNumber(p.details.available_spaces)} spaces available`;
   return p.subtitle || p.venue?.name || p.venue_name || humanize(p.subcategory || p.shop_type || p.category) || DATASET_BY_ID[p.__dataset]?.source || 'City information';
 }
@@ -91,6 +95,11 @@ export function featureDetails(feature) {
     if (typeof d.active_opening === 'boolean') add('Opening for vessels', d.active_opening ? 'Yes' : 'No');
     add('Opening began', formatDate(d.schedule?.start));
   }
+  if (p.__dataset === 'cameras') {
+    add('Camera type', d.camera_type === 'anpr' ? 'Speed camera' : humanize(d.camera_type));
+    add('Operator', d.operator);
+    if (typeof d.has_live_feed === 'boolean') add('Public feed', d.has_live_feed ? 'Listed by source' : 'No public feed listed');
+  }
   const address = [p.venue?.address || [p.street_name || d.street, p.house_number].filter(Boolean).join(' '), p.postal_code || p.venue?.postal_code].filter(Boolean).join(', ');
   add('Address', address); add('District', p.district || p.district_name);
   if (p.opening_hours || d.opening_hours) add('Opening hours', p.opening_hours || d.opening_hours);
@@ -115,8 +124,10 @@ export function featureDescription(feature) {
 }
 export function featureAction(feature) {
   const p = feature?.properties || {};
-  const href = safeLink(p.ticket_url || p.details?.link || p.website || p.details?.website);
-  return href ? { href, label: p.ticket_url ? 'Event information & tickets' : p.__dataset === 'news' ? 'Read the original story' : 'Visit source website' } : null;
+  const cameraLink = p.__dataset === 'cameras' && p.details?.has_live_feed === true ? safeLink(p.details?.stream_url || p.details?.snapshot_url) : null;
+  const mappedSource = p.__dataset === 'cameras' ? safeLink(p.details?.source_url) : null;
+  const href = cameraLink || mappedSource || safeLink(p.ticket_url || p.details?.link || p.website || p.details?.website);
+  return href ? { href, label: cameraLink ? 'Open public camera' : mappedSource ? 'View mapped source' : p.ticket_url ? 'Event information & tickets' : p.__dataset === 'news' ? 'Read the original story' : 'Visit source website' } : null;
 }
 export function geometryBounds(geometry) {
   if (!geometry || !Array.isArray(geometry.coordinates)) return null;

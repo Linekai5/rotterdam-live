@@ -4,7 +4,7 @@ test('layers load on demand, show selectable results, and clear from the map', a
   let requests = 0;
   await page.route('**/api/v1/events?**', route => { requests++; return route.fulfill({ json: { type: 'FeatureCollection', features: [feature] } }); });
   await page.goto('/?weather=off');
-  await expect(page.getByRole('heading', { name: 'Find your Rotterdam.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Explore Rotterdam.' })).toBeVisible();
   expect(requests).toBe(0);
   await page.getByRole('button', { name: 'What’s on', exact: true }).click();
   await expect(page.getByRole('button', { name: 'What’s on', exact: true })).toContainText('1 in this view');
@@ -174,4 +174,54 @@ test('the desktop explorer can collapse without disabling overlays, and search r
   await page.keyboard.press('Control+k');
   await expect(page.getByRole('textbox', { name: 'Search Rotterdam' })).toBeFocused();
   await expect(page.getByRole('complementary', { name: 'City explorer' })).toBeVisible();
+});
+
+test('category navigation stays idle and camera filters request mapped locations with honest source details', async ({ page }) => {
+  const requests = [];
+  await page.route('**/api/v1/amenities/cameras?**', route => {
+    const params = new URL(route.request().url()).searchParams;
+    requests.push(Object.fromEntries(params));
+    return route.fulfill({ json: { type: 'FeatureCollection', features: [{ ...feature, id: 'osm-camera', properties: { title: 'Mapped traffic camera', subcategory: 'camera', details: { camera_type: 'traffic', has_live_feed: false, operator: 'Municipal source', source_url: 'https://www.openstreetmap.org/node/1234', location_basis: 'osm_camera_tag' } } }] } });
+  });
+  await page.goto('/?weather=off');
+  await page.getByRole('button', { name: 'Move', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Traffic', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'What’s on', exact: true })).toHaveCount(0);
+  expect(requests).toHaveLength(0);
+  await page.getByRole('button', { name: 'City', exact: true }).click();
+  await page.getByRole('button', { name: 'Cameras', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Cameras', exact: true })).toContainText('1 in this view');
+  expect(requests).toHaveLength(1);
+  expect(requests[0].camera_type).toBeUndefined();
+  await page.getByLabel('Cameras: Camera type').selectOption('traffic');
+  await expect.poll(() => requests.at(-1).camera_type).toBe('traffic');
+  await page.getByRole('button', { name: 'Explore cameras', exact: true }).click();
+  await page.getByRole('button', { name: /Mapped traffic camera/ }).click();
+  const details = page.getByRole('region', { name: 'Location details' });
+  await expect(details).toContainText('No public feed listed');
+  await expect(details.getByRole('link', { name: 'View mapped source' })).toHaveAttribute('href', 'https://www.openstreetmap.org/node/1234');
+  await expect(details.getByRole('link', { name: 'Open public camera' })).toHaveCount(0);
+});
+
+test('map glyph hover previews the place without opening or fetching its details', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.route('**/api/v1/mobility?**', route => route.fulfill({ json: { type: 'FeatureCollection', features: [{ ...feature, id: 'bridge', properties: { title: 'Erasmusbrug', subcategory: 'bridge', details: { active_opening: false } } }] } }));
+  await page.goto('/?weather=off');
+  await page.getByRole('button', { name: 'Bridges', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => {
+    if (!window.map.getLayer('explore-bridges-point')) return 0;
+    return window.map.queryRenderedFeatures({ layers: ['explore-bridges-point'] }).length;
+  })).toBeGreaterThan(0);
+  const point = await page.evaluate(() => { const p = window.map.project([4.48, 51.92]); return { x: p.x, y: p.y - 14 }; });
+  await page.mouse.move(point.x, point.y);
+  await expect(page.locator('.map-tooltip')).toContainText('Erasmusbrug');
+  await expect(page.getByRole('region', { name: 'Location details' })).toHaveCount(0);
+  await page.mouse.move(1100, 800);
+  await expect(page.locator('.map-tooltip')).toHaveCount(0);
+  await page.mouse.click(point.x, point.y);
+  const details = page.getByRole('region', { name: 'Location details' });
+  await expect(details.getByRole('button', { name: 'Show on map' })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.map.getSource('explorer-selection')?._data.features[0]?.geometry?.type)).toBe('Point');
+  expect(errors).toEqual([]);
 });

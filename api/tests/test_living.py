@@ -1,7 +1,14 @@
 """Comprehensive Unit and Integration Tests for /api/v1/living Domain."""
+import json
+from unittest.mock import AsyncMock
+
 import pytest
 import httpx
+from sqlalchemy import text
+
 from app.main import app
+from app.api.v1 import living as living_api
+from app.db.session import AsyncSessionLocal
 from app.ingestion.living_harvester import RotterdamLivingHarvester
 
 
@@ -127,8 +134,27 @@ async def test_housing_filter_by_district():
 
 
 @pytest.mark.asyncio
-async def test_district_passport_success():
+async def test_district_passport_success(monkeypatch):
     """Verify GET /api/v1/living/districts/{name}/passport returns RFC 7946 GeoJSON Feature."""
+    # Exercise the current database join, independently of a previously cached
+    # annual profile. Source statistics may change when ingestion runs.
+    monkeypatch.setattr(living_api, "get_cached_json", AsyncMock(return_value=None))
+    monkeypatch.setattr(living_api, "set_cached_json", AsyncMock())
+    async with AsyncSessionLocal() as session:
+        housing = (await session.execute(text("""
+            SELECT total_residential_units, avg_surface_area_m2, amenity_counts, livability_index
+            FROM district_housing_metrics WHERE district_code = 'WK059901'
+        """))).mappings().one()
+        demographics = (await session.execute(text("""
+            SELECT total_population, age_0_14
+            FROM district_demographics WHERE district_code = 'WK059901'
+        """))).mappings().one()
+        geometry = json.loads(await session.scalar(text("""
+            SELECT ST_AsGeoJSON(geom) FROM rotterdam_districts WHERE code = 'WK059901'
+        """)))
+    amenity_counts = housing["amenity_counts"]
+    if isinstance(amenity_counts, str):
+        amenity_counts = json.loads(amenity_counts)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -140,17 +166,19 @@ async def test_district_passport_success():
         assert data["id"] == "WK059901"
         assert data["geometry"]["type"] == "MultiPolygon"
         assert len(data["geometry"]["coordinates"]) > 0
+        assert data["geometry"] == geometry
 
         props = data["properties"]
         assert props["district_code"] == "WK059901"
         assert props["district_name"] == "Rotterdam Centrum"
-        assert props["demographics"]["total_population"] == 42925
-        assert props["demographics"]["age_brackets"]["0-14"] == 3120
-        assert props["housing"]["total_residential_units"] == 29511
-        assert props["housing"]["surface_area"]["average_m2"] == 82.5
-        assert props["amenities"]["supermarkets"] == 26
-        assert props["amenities"]["cameras"] == 2101
-        assert props["livability"]["overall_index"] == 104.0
+        assert props["demographics"]["total_population"] == demographics["total_population"]
+        assert props["demographics"]["age_brackets"]["0-14"] == demographics["age_0_14"]
+        assert props["housing"]["total_residential_units"] == housing["total_residential_units"]
+        assert props["housing"]["surface_area"]["average_m2"] == float(housing["avg_surface_area_m2"])
+        assert props["amenities"]["supermarkets"] == amenity_counts["supermarkets"]
+        assert props["amenities"]["cameras"] == amenity_counts["cameras"]
+        assert props["housing"]["amenity_counts"] == props["amenities"]
+        assert props["livability"]["overall_index"] == float(housing["livability_index"])
 
         # Test 2: Hyphenated name 'Kralingen-Crooswijk'
         resp_kc = await client.get("/api/v1/living/districts/kralingen-crooswijk/passport")

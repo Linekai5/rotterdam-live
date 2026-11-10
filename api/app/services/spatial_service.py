@@ -334,10 +334,15 @@ async def query_city_amenities(
             params["camera_type"] = camera_type
 
     if has_live_feed is not None:
-        if has_live_feed:
-            conditions.append("(details->>'has_live_feed' = 'true' OR details->>'snapshot_url' IS NOT NULL OR details->>'stream_url' IS NOT NULL)")
-        else:
-            conditions.append("(details->>'has_live_feed' = 'false' OR (details->>'snapshot_url' IS NULL AND details->>'stream_url' IS NULL))")
+        # Older records can contain a public URL alongside a false/missing flag.
+        # Use one predicate and its inverse so filters cannot overlap, and do
+        # not count empty provider URL strings as a viewing link.
+        live_feed = (
+            "(COALESCE(details->>'has_live_feed' = 'true', FALSE) OR "
+            "NULLIF(BTRIM(details->>'snapshot_url'), '') IS NOT NULL OR "
+            "NULLIF(BTRIM(details->>'stream_url'), '') IS NOT NULL)"
+        )
+        conditions.append(live_feed if has_live_feed else f"NOT {live_feed}")
 
     if wheelchair_accessible is not None:
         if wheelchair_accessible:

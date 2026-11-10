@@ -297,82 +297,14 @@ class MunicipalAmenitiesIngestor(BaseIngestor):
         return saved
 
     async def ingest_cameras(self) -> int:
-        """Ingest public surveillance cameras in Rotterdam from OpenStreetMap or municipal camera zones."""
-        query = """
-        [out:json][timeout:20];
-        area["name"="Rotterdam"]["admin_level"="8"][boundary=administrative]->.a;
-        (
-          node["man_made"="surveillance"](area.a);
-          node["surveillance"](area.a);
-        );
-        out body;
-        """
-        url = f"{self.OVERPASS_URL}?data=" + urllib.parse.quote(query.strip())
-        client = await self.get_client()
-        nodes = []
+        """Use the same source-tagged camera directory as the dedicated worker."""
+        from app.ingestion.camera_harvester import RotterdamCameraHarvester
+        harvester = RotterdamCameraHarvester()
         try:
-            res = await client.get(url)
-            if res.status_code == 200:
-                data = res.json()
-                nodes = data.get("elements", [])
-            else:
-                logger.warning("Overpass returned status {}; falling back to official surveillance camera zones", res.status_code)
-        except Exception as e:
-            logger.warning("Overpass request failed: {}; falling back to official camera zones", e)
-
-        if not nodes:
-            nodes = [
-                {"id": "cam-stadhuisplein", "lat": 51.9228, "lon": 4.4795, "tags": {"camera:type": "PTZ Dome", "operator": "Gemeente Rotterdam / Politie", "surveillance:zone": "Stadhuisplein Horecaconcentratiegebied"}},
-                {"id": "cam-cs-plein", "lat": 51.9244, "lon": 4.4700, "tags": {"camera:type": "Dome Fixed", "operator": "Politie Rotterdam-Centrum", "surveillance:zone": "Stationsplein / Kruisplein"}},
-                {"id": "cam-wittedewith", "lat": 51.9155, "lon": 4.4780, "tags": {"camera:type": "PTZ Dome", "operator": "Gemeente Rotterdam / Politie", "surveillance:zone": "Witte de Withstraat Uitgaansgebied"}},
-                {"id": "cam-koopgoot", "lat": 51.9197, "lon": 4.4812, "tags": {"camera:type": "CCTV Dome", "operator": "Gemeente Rotterdam / Handhaving", "surveillance:zone": "Beursplein / Koopgoot Winkelzone"}},
-                {"id": "cam-oudehaven", "lat": 51.9190, "lon": 4.4925, "tags": {"camera:type": "PTZ Dome", "operator": "Gemeente Rotterdam / Politie", "surveillance:zone": "Oude Haven / Haringvliet"}},
-                {"id": "cam-schouwburgplein", "lat": 51.9215, "lon": 4.4725, "tags": {"camera:type": "CCTV Dome", "operator": "Gemeente Rotterdam / Handhaving", "surveillance:zone": "Schouwburgplein Evenemententerrein"}},
-                {"id": "cam-zuidplein", "lat": 51.8880, "lon": 4.4890, "tags": {"camera:type": "PTZ Dome", "operator": "Politie Rotterdam-Zuid", "surveillance:zone": "Zuidplein OV-Knooppunt / Winkelcentrum"}},
-                {"id": "cam-meent", "lat": 51.9230, "lon": 4.4850, "tags": {"camera:type": "CCTV Dome", "operator": "Gemeente Rotterdam", "surveillance:zone": "Meent / Pannekoekstraat"}},
-                {"id": "cam-blaak", "lat": 51.9200, "lon": 4.4870, "tags": {"camera:type": "PTZ Dome", "operator": "Gemeente Rotterdam / Politie", "surveillance:zone": "Binnenrotte Marktplein / Station Blaak"}},
-                {"id": "cam-wilhelminapier", "lat": 51.9050, "lon": 4.4895, "tags": {"camera:type": "CCTV Fixed", "operator": "Gemeente Rotterdam", "surveillance:zone": "Kop van Zuid / Wilhelminapier"}},
-                {"id": "cam-marconiplein", "lat": 51.9110, "lon": 4.4320, "tags": {"camera:type": "PTZ Dome", "operator": "Politie Rotterdam-West", "surveillance:zone": "Marconiplein OV-Knooppunt"}},
-                {"id": "cam-maashaven", "lat": 51.8950, "lon": 4.4950, "tags": {"camera:type": "PTZ Dome", "operator": "Gemeente Rotterdam / Handhaving", "surveillance:zone": "Maashaven Zuidzijde / Brielselaan"}},
-            ]
-        saved = 0
-
-        async with AsyncSessionLocal() as session:
-            for node in nodes:
-                node_id = str(node.get("id"))
-                lat = float(node.get("lat"))
-                lon = float(node.get("lon"))
-                tags = node.get("tags", {})
-
-                cam_type = tags.get("surveillance:type") or tags.get("camera:type") or "CCTV"
-                operator = tags.get("operator") or tags.get("surveillance") or "Gemeente Rotterdam / Politie"
-                zone = tags.get("surveillance:zone") or "Openbare ruimte Cameratoezicht"
-
-                district = await find_district_for_point(lon, lat, session)
-
-                amenity_dict = {
-                    "id": f"camera-{node_id}",
-                    "category": "amenity",
-                    "subcategory": "camera",
-                    "name": f"Cameratoezicht: {zone}",
-                    "description": f"Surveillance camera in openbare ruimte: {cam_type} ({operator})",
-                    "district": district,
-                    "lon": lon,
-                    "lat": lat,
-                    "is_active": True,
-                    "details": {
-                        "osm_id": node_id,
-                        "camera_type": cam_type,
-                        "operator": operator,
-                        "surveillance_zone": zone,
-                    },
-                }
-
-                if await upsert_city_amenity(amenity_dict, session):
-                    saved += 1
-
-        logger.info("Ingested {} surveillance cameras", saved)
-        return saved
+            result = await harvester.ingest()
+            return result["total_cameras"]
+        finally:
+            await harvester.close()
 
     async def ingest(self) -> Dict[str, int]:
         """Execute complete ingestion pass of all municipal civic amenities."""

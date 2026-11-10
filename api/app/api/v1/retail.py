@@ -3,6 +3,7 @@ import json
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
+from app.api.deps import parse_bbox_param
 from app.db.session import AsyncSessionLocal
 from app.schemas.retail import RetailFeature, RetailFeatureCollection, RetailProperties, RetailStats
 from app.schemas.geojson import PointGeometry
@@ -24,6 +25,7 @@ async def get_retail_facilities(
     offset: int = Query(0, ge=0, description="Pagination offset"),
 ):
     """Retrieve verified retail shops, supermarkets, and commercial facilities in Rotterdam."""
+    bbox_coords = parse_bbox_param(bbox)
     cache_key = f"retail:list:{shop_type}:{brand}:{district}:{wheelchair}:{q}:{bbox}:{limit}:{offset}"
     cached = await get_cached_json(cache_key)
     if cached:
@@ -52,13 +54,10 @@ async def get_retail_facilities(
         conditions.append("(name ILIKE :q OR brand ILIKE :q)")
         params["q"] = f"%{q.strip()}%"
 
-    if bbox:
-        try:
-            min_lon, min_lat, max_lon, max_lat = map(float, bbox.split(","))
-            conditions.append("geom && ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)")
-            params.update({"min_lon": min_lon, "min_lat": min_lat, "max_lon": max_lon, "max_lat": max_lat})
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid bbox format. Use min_lon,min_lat,max_lon,max_lat")
+    if bbox_coords:
+        min_lon, min_lat, max_lon, max_lat = bbox_coords
+        conditions.append("geom && ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)")
+        params.update({"min_lon": min_lon, "min_lat": min_lat, "max_lon": max_lon, "max_lat": max_lat})
 
     where_clause = " AND ".join(conditions)
 

@@ -1,8 +1,9 @@
 <script>
   import { onDestroy } from 'svelte';
   import { fly } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
   import { API_BASE_URL } from './liveLayers.js';
-  import { DATASET_BY_ID, featureTitle, featureSubtitle, featureDetails, featureDescription, featureAction, safeLink, formatNumber } from './explorerData.js';
+  import { DATASET_BY_ID, featureTitle, featureSubtitle, featureDetails, featureDescription, featureAction, safeLink, formatNumber, formatDate } from './explorerData.js';
   import ExplorerIcon from './ExplorerIcon.svelte';
   export let feature;
   export let layerState = null;
@@ -20,12 +21,23 @@
   $: dataset = DATASET_BY_ID[properties.__dataset];
   $: rows = featureDetails(feature);
   $: action = featureAction(feature);
+  $: highlight = primaryMetric(properties);
+  function primaryMetric(p) {
+    const d = p.details || {};
+    if (p.__dataset === 'parking' && Number.isFinite(d.available_spaces)) return { label: 'Spaces available', value: formatNumber(d.available_spaces), unit: Number.isFinite(d.total_capacity) ? `of ${formatNumber(d.total_capacity)} spaces` : 'spaces', number: true };
+    if (p.__dataset === 'traffic' && Number.isFinite(p.speed_kmh)) return { label: 'Current corridor speed', value: formatNumber(p.speed_kmh), unit: 'km/h', number: true };
+    if (p.__dataset === 'crowd' && Number.isFinite(p.crowd_index)) return { label: 'Estimated district activity', value: formatNumber(p.crowd_index), unit: '/ 100 · model estimate', number: true };
+    if (p.__dataset === 'bridges' && typeof d.active_opening === 'boolean') return { label: 'Opening for vessels', value: d.active_opening ? 'In progress' : 'Not active', unit: 'Latest reported status' };
+    if (p.__dataset === 'events' && p.start_time) return { label: 'Next on the calendar', value: formatDate(p.start_time), unit: p.venue?.name || p.venue_name || 'Rotterdam' };
+    if (p.__dataset === 'environment' && Number.isFinite(d.pm25)) return { label: 'Fine particulate matter', value: formatNumber(d.pm25), unit: 'µg/m³ · PM2.5', number: true };
+    return null;
+  }
   $: candidateDistrict = properties.district_name || properties.district || (properties.__dataset === 'districts' ? properties.name : null);
   $: district = ['Rotterdam', 'Rotterdam-Rijnmond'].includes(candidateDistrict) ? null : candidateDistrict;
   $: if (previousFeature !== feature) {
-    previousFeature = feature; profileAbort?.abort(); profile = null; profileStatus = 'idle'; imageFailed = false;
+    previousFeature = feature; profileAbort?.abort(); profileAbort = null; profile = null; profileStatus = 'idle'; imageFailed = false;
   }
-  onDestroy(() => profileAbort?.abort());
+  onDestroy(() => { profileAbort?.abort(); profileAbort = null; });
   async function loadProfile() {
     profileAbort?.abort();
     const abort = new AbortController(); profileAbort = abort; profileStatus = 'loading';
@@ -41,27 +53,103 @@
   }
 </script>
 
-<section class="selection-card" class:full-map={!explorerOpen} aria-label="Location details" in:fly={{ y: 14, duration: reducedMotion ? 0 : 280 }} out:fly={{ y: 8, duration: reducedMotion ? 0 : 140 }}>
-  <div class="card-heading"><span class="eyebrow">{dataset?.label || 'A PLACE IN ROTTERDAM'}</span><button class="close" aria-label="Close location details" on:click={onClose}><ExplorerIcon name="close" size={17}/></button></div>
-  {#if !imageFailed && safeLink(properties.image_url)}<img class="event-image" src={safeLink(properties.image_url)} alt="" loading="lazy" on:error={() => imageFailed = true}/>{/if}
-  <div class="content">
-    <h2>{featureTitle(feature)}</h2><p class="subtitle">{featureSubtitle(feature)}</p>
-    {#if layerState?.status === 'stale'}<div class="record-state">Last available record · this feed could not refresh.</div>{/if}
-    {#if featureDescription(feature)}<p class="description">{featureDescription(feature)}</p>{/if}
-    {#if rows.length}<dl>{#each rows as row}<div><dt>{row.label}</dt><dd>{row.value}</dd></div>{/each}</dl>{/if}
-    {#if profileStatus === 'ready'}
-      <div class="profile" role="region" aria-label="District profile"><span class="eyebrow">{profile.demographics?.data_year || ''} DISTRICT PROFILE</span><h3>{profile.district_name}</h3><div class="profile-grid"><div><strong>{formatNumber(profile.demographics?.total_population)}</strong><span>Residents</span></div><div><strong>{formatNumber(profile.housing?.surface_area?.average_m2)}<small> m²</small></strong><span>Average home</span></div></div><p>{profile.demographics?.source || 'District statistics'} · Annual statistics, not live readings.</p></div>
-    {/if}
-    {#if profileStatus === 'error'}<p class="record-state" role="status">The district profile is unavailable right now.</p>{/if}
-    <div class="actions">
-      {#if action}<a href={action.href} target="_blank" rel="noopener noreferrer">{action.label}<ExplorerIcon name="arrow" size={13}/></a>{/if}
-      {#if district && profileStatus !== 'ready'}<button disabled={profileStatus === 'loading'} on:click={loadProfile}>{profileStatus === 'loading' ? 'Loading district profile…' : profileStatus === 'error' ? 'Retry district profile' : 'Explore this district'}<ExplorerIcon name="district" size={14}/></button>{/if}
-      {#if canFocus}<button on:click={onFocus}>Show on map<ExplorerIcon name="pin" size={14}/></button>{:else}<p class="record-state">This place is outside the central map area. Its location details are shown here.</p>{/if}
-    </div>
+<section class="selection-card" class:full-map={!explorerOpen} aria-label="Location details" in:fly={{ x: 18, duration: reducedMotion ? 0 : 420, easing: cubicOut }} out:fly={{ x: 10, duration: reducedMotion ? 0 : 160 }}>
+  <div class="card-heading">
+    <span class="category-mark"><ExplorerIcon name={dataset?.icon || 'pin'} size={19}/></span>
+    <span class="eyebrow">{dataset?.label || 'A PLACE IN ROTTERDAM'}</span>
+    <button class="close" aria-label="Close location details" on:click={onClose}><ExplorerIcon name="close" size={17}/></button>
   </div>
+  {#key feature?.id || properties.id || featureTitle(feature)}
+    <div class="record-body" in:fly={{ y: 10, duration: reducedMotion ? 0 : 320, easing: cubicOut }}>
+      {#if !imageFailed && safeLink(properties.image_url)}<div class="image-frame"><img class="event-image" src={safeLink(properties.image_url)} alt="" loading="lazy" on:error={() => imageFailed = true}/></div>{/if}
+      <div class="content">
+        <span class="place-label">SELECTED LOCATION <span aria-hidden="true">↗</span></span>
+        <h2>{featureTitle(feature)}</h2>
+        <p class="subtitle">{featureSubtitle(feature)}</p>
+        {#if layerState?.status === 'stale'}<div class="record-state" role="status">Last available record · this feed could not refresh.</div>{/if}
+        {#if highlight}
+          <div class="primary-metric" class:numeric={highlight.number}>
+            <span class="metric-label">{highlight.label}</span>
+            <div><strong>{highlight.value}</strong><span>{highlight.unit}</span></div>
+            <svg class="metric-rule" viewBox="0 0 280 8" preserveAspectRatio="none" aria-hidden="true"><path d="M0 7h267l7-6h6"/></svg>
+          </div>
+        {/if}
+        {#if featureDescription(feature)}<p class="description">{featureDescription(feature)}</p>{/if}
+        {#if rows.length}<dl>{#each rows as row, index}<div style={`--row:${Math.min(index, 8)}`}><dt>{row.label}</dt><dd>{row.value}</dd></div>{/each}</dl>{/if}
+        {#if profileStatus === 'ready'}
+          <div class="profile" role="region" aria-label="District profile" in:fly={{ y: 8, duration: reducedMotion ? 0 : 260 }}>
+            <span class="eyebrow">{profile.demographics?.data_year || ''} DISTRICT PROFILE</span>
+            <h3>{profile.district_name}</h3>
+            <div class="profile-grid"><div><strong>{formatNumber(profile.demographics?.total_population)}</strong><span>Residents</span></div><div><strong>{formatNumber(profile.housing?.surface_area?.average_m2)}<small> m²</small></strong><span>Average home</span></div></div>
+            <p>{profile.demographics?.source || 'District statistics'} · Annual statistics, not live readings.</p>
+          </div>
+        {/if}
+        {#if profileStatus === 'error'}<p class="record-state" role="status">The district profile is unavailable right now.</p>{/if}
+        <div class="actions">
+          {#if action}<a class="primary-action" href={action.href} target="_blank" rel="noopener noreferrer">{action.label}<ExplorerIcon name="arrow" size={16}/></a>{/if}
+          {#if district && profileStatus !== 'ready'}<button disabled={profileStatus === 'loading'} on:click={loadProfile}>{profileStatus === 'loading' ? 'Loading district profile…' : profileStatus === 'error' ? 'Retry district profile' : 'Explore this district'}<ExplorerIcon name="district" size={16}/></button>{/if}
+          {#if canFocus}<button on:click={onFocus}>Show on map<ExplorerIcon name="pin" size={16}/></button>{:else}<p class="record-state">This place is outside the central map area. Its location details are shown here.</p>{/if}
+        </div>
+      </div>
+    </div>
+  {/key}
 </section>
 
 <style>
-  .selection-card{position:absolute;pointer-events:auto;left:380px;bottom:28px;width:340px;max-width:calc(100vw - 32px);max-height:calc(100dvh - 100px);overflow:auto;background:#1d231ff7;color:#e3e6da;border:1px solid #ffffff1c;border-radius:14px;box-shadow:0 16px 70px #0005;scrollbar-width:thin;scrollbar-color:#46523c transparent;box-sizing:border-box}.card-heading{display:flex;align-items:center;justify-content:space-between;padding:16px 22px;border-bottom:1px solid #ffffff0c}.eyebrow{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:#aebb9e}.close{display:grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:5px;background:#ffffff04;color:#bac5b1;cursor:pointer}.content{padding:22px}.event-image{display:block;width:100%;height:145px;object-fit:cover;filter:saturate(.28) brightness(.8);border-bottom:1px solid #ffffff15}h2{font:27px/1.18 Georgia,serif;letter-spacing:-.5px;margin:0 0 12px;overflow-wrap:anywhere}.subtitle{font-size:11px;color:#b5c0a9;line-height:1.6;margin:0}.description{font-size:12px;color:#a6b09e;line-height:1.85;max-height:150px;overflow:auto;margin:18px 0 20px}.record-state{padding:10px 12px;border:1px solid #bdad8b33;background:#bdad8b08;border-radius:6px;color:#c4b89f;font-size:10px;line-height:1.6;margin-top:14px}dl{margin:21px 0 0}dl>div{display:grid;grid-template-columns:100px 1fr;gap:15px;padding:10px 0;border-top:1px solid #ffffff10;font-size:10px;line-height:1.6}dt{color:#94a289}dd{margin:0;color:#d3dacc;text-align:right;overflow-wrap:anywhere}.actions{display:grid;gap:8px;margin-top:20px}.actions a,.actions button{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 12px;font:11px system-ui,sans-serif;border:1px solid #b1bfa433;background:#b1bfa407;border-radius:7px;color:#d9dfd1;text-decoration:none;cursor:pointer;text-align:left;transition:background .2s}.actions a:hover,.actions button:hover{background:#b1bfa416}.actions button:disabled{opacity:.5;cursor:wait}button:focus-visible,a:focus-visible{outline:2px solid #c2ccb8;outline-offset:-3px}.profile{border:1px solid #ffffff13;background:#ffffff03;border-radius:8px;padding:16px;margin-top:20px}h3{font:20px Georgia,serif;margin:10px 0 16px}.profile-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.profile-grid strong{display:block;font-weight:450;font-size:23px;letter-spacing:-.5px}.profile-grid span{display:block;font-size:9px;color:#9eae91;margin-top:6px}.profile-grid small{font-size:12px}.profile p{font-size:9px;color:#91a083;line-height:1.7;margin:18px 0 0}@media(max-width:1000px) and (min-width:701px){.selection-card{left:370px;width:calc(100vw - 390px);max-width:340px}}@media(max-width:700px){.selection-card{left:12px;bottom:82px;width:calc(100% - 24px);max-height:calc(100dvh - 230px);z-index:5}.content{padding:20px}.event-image{height:110px}h2{font-size:25px}}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
-@media(min-width:701px){.selection-card.full-map{left:24px}}
+  .selection-card {
+    position:absolute; pointer-events:auto; left:calc(var(--explorer-inset, 24px) + var(--explorer-width, 352px) + 16px); bottom:28px;
+    width:360px; max-width:calc(100vw - 32px); max-height:calc(100dvh - 114px); overflow:auto; box-sizing:border-box;
+    color:#f0eee7; background:#171a19fa; border:1px solid #d5dfce29; border-radius:4px 18px 4px 4px;
+    box-shadow:0 20px 60px #0003; scrollbar-width:thin; scrollbar-color:#4d5648 transparent; font-family:inherit; font-size:13px; line-height:1.5;
+  }
+  .card-heading { display:flex; align-items:center; gap:11px; min-height:57px; padding:0 22px; border-bottom:1px solid #ffffff14; }
+  .category-mark { display:grid; place-items:center; color:#b9c5ac; }
+  .eyebrow { font-size:10px; line-height:1.5; letter-spacing:1.25px; text-transform:uppercase; color:#b9c5ac; }
+  .close { display:grid; place-items:center; margin-left:auto; width:44px; height:44px; padding:0; border:1px solid transparent; border-radius:50%; color:#b7bcb3; background:transparent; cursor:pointer; transition:transform .25s,background .25s,border-color .25s; }
+  .close:hover { transform:rotate(90deg); border-color:#ffffff24; background:#ffffff06; }
+  .content { padding:25px 24px 23px; }
+  .image-frame { overflow:hidden; border-bottom:1px solid #ffffff16; }
+  .event-image { display:block; width:100%; height:165px; object-fit:cover; filter:saturate(.45) brightness(.8); animation:image-settle 800ms cubic-bezier(.2,.7,.2,1) both; }
+  .place-label { display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; font-size:9px; letter-spacing:1.6px; color:#929b8e; }
+  .place-label span { font-size:17px; letter-spacing:0; color:#b9c5ac; }
+  h2 { font-size:27px; font-weight:500; line-height:1.14; letter-spacing:-1px; margin:0 0 12px; overflow-wrap:anywhere; text-wrap:balance; }
+  .subtitle { margin:0; color:#a8b0a2; font-size:12px; line-height:1.6; }
+  .primary-metric { position:relative; padding:22px 0 20px; margin-top:20px; border-top:1px solid #ffffff18; }
+  .metric-label { display:block; font-size:10px; letter-spacing:.4px; color:#a8b0a2; }
+  .primary-metric>div { display:flex; flex-wrap:wrap; align-items:baseline; gap:9px; margin-top:9px; }
+  .primary-metric strong { font-size:25px; font-weight:450; line-height:1.18; letter-spacing:-1px; }
+  .primary-metric.numeric strong { font-size:53px; letter-spacing:-3px; font-variant-numeric:tabular-nums; }
+  .primary-metric>div>span { color:#a8b0a2; font-size:11px; }
+  .metric-rule { position:absolute; bottom:0; left:0; width:100%; height:8px; fill:none; stroke:#b9c5ac66; stroke-width:1; }
+  .metric-rule path { stroke-dasharray:290; stroke-dashoffset:290; animation:trace-rule 650ms 100ms cubic-bezier(.2,.7,.2,1) forwards; }
+  .description { font-size:12px; color:#b0b6ab; line-height:1.8; max-height:170px; overflow:auto; margin:21px 0; }
+  .record-state { padding:11px 12px; border-left:2px solid #bcae90; background:#bcae9009; color:#c8bda7; font-size:11px; line-height:1.6; margin:17px 0 0; }
+  dl { margin:23px 0 0; }
+  dl>div { display:grid; grid-template-columns:minmax(90px, .85fr) 1.4fr; gap:16px; padding:11px 0; border-bottom:1px solid #ffffff10; font-size:12px; line-height:1.5; animation:record-reveal 350ms calc(var(--row) * 28ms) both; }
+  dt { color:#949e8e; }
+  dd { margin:0; color:#d9ddd3; text-align:right; overflow-wrap:anywhere; }
+  .actions { display:grid; gap:7px; margin-top:24px; }
+  .actions a,.actions button { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:13px 14px; font:inherit; font-size:12px; border:1px solid #ffffff20; border-radius:3px; color:#e1e4da; background:transparent; text-decoration:none; cursor:pointer; text-align:left; transition:background .2s,border-color .2s; }
+  .actions .primary-action { background:#b9c5ac; color:#1c211a; border-color:#b9c5ac; }
+  .actions a:hover,.actions button:hover { background:#ffffff09; border-color:#b9c5ac88; }
+  .actions .primary-action:hover { background:#cbd4c1; border-color:#cbd4c1; }
+  .actions :global(svg) { flex-shrink:0; transition:transform .25s cubic-bezier(.2,.7,.2,1); }
+  .actions a:hover :global(svg),.actions button:hover :global(svg) { transform:translate(2px,-2px); }
+  .actions button:disabled { opacity:.55; cursor:wait; }
+  button:focus-visible,a:focus-visible { outline:2px solid #d9e2ce; outline-offset:3px; }
+  .profile { margin-top:24px; border-top:1px solid #b9c5ac55; padding-top:21px; }
+  h3 { font-size:23px; font-weight:450; line-height:1.2; letter-spacing:-.6px; margin:11px 0 21px; }
+  .profile-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+  .profile-grid>div+div { padding-left:20px; border-left:1px solid #ffffff1b; }
+  .profile-grid strong { display:block; font-weight:450; font-size:27px; line-height:1; letter-spacing:-1px; }
+  .profile-grid span { display:block; font-size:11px; color:#a1ad96; margin-top:8px; }
+  .profile-grid small { font-size:13px; }
+  .profile p { font-size:10px; color:#969f8f; line-height:1.7; margin:19px 0 0; }
+  .selection-card.full-map { left:24px; }
+  @keyframes image-settle { from { transform:scale(1.045); } to { transform:scale(1); } }
+  @keyframes trace-rule { to { stroke-dashoffset:0; } }
+  @keyframes record-reveal { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:translateY(0); } }
+  @media(max-width:1050px) and (min-width:701px) { .selection-card { width:calc(100vw - var(--explorer-width, 352px) - 64px); min-width:260px; max-width:360px; } }
+  @media(max-width:700px) { .selection-card,.selection-card.full-map { left:12px; bottom:84px; width:calc(100% - 24px); max-height:calc(100dvh - 220px); border-radius:18px 18px 4px 4px; z-index:5; } .content { padding:22px; } .card-heading { min-height:52px; } .event-image { height:125px; } h2 { font-size:26px; } }
+  @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; } .metric-rule path { stroke-dashoffset:0; } }
 </style>
