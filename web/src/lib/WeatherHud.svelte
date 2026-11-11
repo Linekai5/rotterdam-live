@@ -1,14 +1,19 @@
 <script>
   import { onMount } from 'svelte';
+  import { language, languageLocale, t, weatherCondition } from './i18n.js';
   export let weatherController = null;
   export let weatherState = { status: 'unavailable', nodes: [] };
 
   let expanded = typeof window === 'undefined' || !window.matchMedia('(max-width: 700px)').matches;
   let userToggled = false;
   let currentTime = new Date();
-  const dateFormat = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: '2-digit', month: 'short', timeZone: 'Europe/Amsterdam' });
-  const clockFormat = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam', timeZoneName: 'short' });
-  const compactClockFormat = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' });
+  const timeZone = 'Europe/Amsterdam';
+  $: locale = languageLocale($language);
+  $: dateFormat = new Intl.DateTimeFormat(locale, { weekday: 'short', day: '2-digit', month: 'short', timeZone });
+  $: clockFormat = new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit', timeZone, timeZoneName: 'short' });
+  $: compactClockFormat = new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit', timeZone });
+  $: wholeNumber = new Intl.NumberFormat(locale, { maximumFractionDigits: 0 });
+  $: decimalNumber = new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   $: dateLabel = dateFormat.format(currentTime);
   $: clockLabel = clockFormat.format(currentTime);
   $: compactClockLabel = compactClockFormat.format(currentTime);
@@ -32,39 +37,62 @@
   });
 
   function toggle() { userToggled = true; expanded = !expanded; }
-  const format = (value, digits = 0) => Number.isFinite(value) ? value.toFixed(digits) : '—';
-  const timeLabel = value => value ? new Date(value).toLocaleTimeString('nl-NL', { timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit' }) : '—';
-  function compass(deg) {
-    return Number.isFinite(deg) ? ['N', 'NNO', 'NO', 'ONO', 'O', 'OZO', 'ZO', 'ZZO', 'Z', 'ZZW', 'ZW', 'WZW', 'W', 'WNW', 'NW', 'NNW'][Math.round(deg / 22.5) % 16] : '—';
+  const format = (value, formatter) => Number.isFinite(value) ? formatter.format(value) : '—';
+  function timeLabel(value, formatter) {
+    const date = new Date(value);
+    return value && Number.isFinite(date.getTime()) ? formatter.format(date) : '—';
+  }
+  const directions = {
+    en: ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'],
+    nl: ['N', 'NNO', 'NO', 'ONO', 'O', 'OZO', 'ZO', 'ZZO', 'Z', 'ZZW', 'ZW', 'WZW', 'W', 'WNW', 'NW', 'NNW']
+  };
+  function compass(degrees, language) {
+    if (!Number.isFinite(degrees)) return '—';
+    const sector = (Math.round(degrees / 22.5) % 16 + 16) % 16;
+    return directions[language][sector];
   }
 </script>
 
-<aside class="weather-hud" class:expanded aria-label="Rotterdam weather">
-  <button class="weather-summary" on:click={toggle} aria-expanded={expanded} aria-controls="weather-dashboard-content" aria-label="Rotterdam weather details" title={expanded ? 'Collapse weather dashboard' : 'Expand weather dashboard'}>
-    <div class="heading"><span class="heading-label">WEATHER <span class="weather-location">/ CENTRUM</span></span><span class="status"><i></i>{weatherState.status === 'live' ? 'Live' : weatherState.status === 'stale' ? 'Outdated' : 'Unavailable'}<span class:open={expanded} class="chevron">⌄</span></span></div>
+<aside class="weather-hud" class:expanded aria-label={$t('Rotterdam weather')}>
+  <button class="weather-summary" on:click={toggle} aria-expanded={expanded} aria-controls="weather-dashboard-content"
+    aria-label={$t('Rotterdam weather details')} title={$t(expanded ? 'Collapse weather dashboard' : 'Expand weather dashboard')}>
+    <div class="heading">
+      <span class="heading-label">{$t('WEATHER')} <span class="weather-location">/ CENTRUM</span></span>
+      <span class="status"><i></i>{$t(weatherState.status === 'live' ? 'Live' : weatherState.status === 'stale' ? 'Outdated' : 'Unavailable')}<span class:open={expanded} class="chevron">⌄</span></span>
+    </div>
     <div class="conditions">
-      <span class="temperature">{format(weatherState.temperatureC, 1)}<small>°</small></span>
+      <span class="temperature">{format(weatherState.temperatureC, decimalNumber)}<small>°</small></span>
       <div class="condition-copy" aria-hidden={!expanded}>
-        <span>{weatherState.nodes?.length ? weatherState.weatherDescription : 'Waiting for current weather'}</span>
-        {#if weatherState.nodes?.length}<span class="wind">{format(weatherState.windSpeedKmh)} km/h · {compass(weatherState.windDirectionDeg)}</span>{/if}
+        <span>{weatherState.nodes?.length ? weatherCondition($language, weatherState.weatherCode, weatherState.weatherDescription) : $t('Waiting for current weather')}</span>
+        {#if weatherState.nodes?.length}<span class="wind">{format(weatherState.windSpeedKmh, wholeNumber)} km/h · {compass(weatherState.windDirectionDeg, $language)}</span>{/if}
       </div>
       <span class="compact-clock" aria-hidden={expanded}>{compactClockLabel}</span>
     </div>
-    <div class="metrics-wrap" aria-hidden={!expanded}><div class="metrics"><span>Cloud cover <b>{format(weatherState.cloudCoverPct)}%</b></span><span>Rain <b>{format(weatherState.precipitationMmH, 1)} <small>mm/h</small></b></span></div></div>
+    <div class="metrics-wrap" aria-hidden={!expanded}>
+      <div class="metrics">
+        <span>{$t('Cloud cover')} <b>{format(weatherState.cloudCoverPct, wholeNumber)}%</b></span>
+        <span>{$t('Rain')} <b>{format(weatherState.precipitationMmH, decimalNumber)} <small>mm/h</small></b></span>
+      </div>
+    </div>
   </button>
   <div id="weather-dashboard-content" class="dashboard-body" aria-hidden={!expanded} inert={!expanded}>
     <div class="dashboard-inner">
-      <time class="weather-clock" datetime={currentTime.toISOString()} aria-label="Current Rotterdam date and time"><span>{dateLabel}</span><strong>{clockLabel}</strong></time>
-      <div class="source-line"><span>Model · {timeLabel(weatherState.validAt)}</span>{#if weatherState.radarAt}<a href="https://www.rainviewer.com/" target="_blank" rel="noreferrer">Radar {timeLabel(weatherState.radarAt)} · RainViewer</a>{:else}<span>{weatherState.radarEnabled ? 'Radar unavailable' : 'Radar off'}</span>{/if}</div>
+      <time class="weather-clock" datetime={currentTime.toISOString()} aria-label={$t('Current Rotterdam date and time')}><span>{dateLabel}</span><strong>{clockLabel}</strong></time>
+      <div class="source-line">
+        <span>Model · {timeLabel(weatherState.validAt, compactClockFormat)}</span>
+        {#if weatherState.radarAt}
+          <a href="https://www.rainviewer.com/" target="_blank" rel="noreferrer">Radar {timeLabel(weatherState.radarAt, compactClockFormat)} · RainViewer</a>
+        {:else}<span>{$t(weatherState.radarEnabled ? 'Radar unavailable' : 'Radar off')}</span>{/if}
+      </div>
       <details class="weather-details">
-        <summary>Source & weather notes<span aria-hidden="true">+</span></summary>
+        <summary>{$t('Source & weather notes')}<span aria-hidden="true">+</span></summary>
         <div class="notes-content">
-          <div class="detail-row"><span>Source</span><span>KNMI via Open-Meteo</span></div>
-          <div class="detail-row"><span>Model valid at</span><span>{timeLabel(weatherState.validAt)} · Rotterdam time</span></div>
-          <p>Model conditions for Rotterdam Centrum. Clouds illustrate low, middle and high cloud cover; they fade as you zoom into the streets.</p>
-          <p>Rain intensity is a model estimate. The radar overlay shows observed precipitation.</p>
-          {#if weatherState.status === 'stale'}<p>These values are outdated. Weather effects resume when fresh data returns.</p>{/if}
-          <button class="refresh" on:click={() => weatherController?.refreshLive()}>Refresh weather <span aria-hidden="true">↻</span></button>
+          <div class="detail-row"><span>{$t('Source')}</span><span>KNMI via Open-Meteo</span></div>
+          <div class="detail-row"><span>{$t('Model valid at')}</span><span>{timeLabel(weatherState.validAt, compactClockFormat)} · {$t('Rotterdam time')}</span></div>
+          <p>{$t('Model conditions for Rotterdam Centrum. The Aerial map shows model clouds that fade as you zoom into the streets.')}</p>
+          <p>{$t('Rain intensity is a model estimate. The radar overlay shows observed precipitation.')}</p>
+          {#if weatherState.status === 'stale'}<p>{$t('These values are outdated. Weather effects resume when fresh data returns.')}</p>{/if}
+          <button class="refresh" on:click={() => weatherController?.refreshLive()}>{$t('Refresh weather')} <span aria-hidden="true">↻</span></button>
         </div>
       </details>
     </div>

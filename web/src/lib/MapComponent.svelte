@@ -3,6 +3,7 @@
   import { initMap } from './map.js';
   import { API_BASE_URL } from './liveLayers.js';
   import { createWeatherEngineController } from './weatherEngine.js';
+  import { t } from './i18n.js';
   import CityExplorer from './CityExplorer.svelte';
   import WeatherHud from './WeatherHud.svelte';
 
@@ -14,6 +15,8 @@
   let mapError = false;
   let removed = false;
   let weatherState = { status: 'unavailable', enabled: true, nodes: [] };
+
+  $: if (map) map.getCanvas().setAttribute('aria-label', $t('Map canvas'));
 
   // Active background connection with the API
   async function checkApiConnection() {
@@ -73,7 +76,13 @@
   <!-- Live weather card with source time, status and radar attribution. -->
   <WeatherHud {weatherController} {weatherState} />
   {#if map}<CityExplorer {map} {weatherController} {weatherState} {apiStatus} />{/if}
-  {#if mapError}<div class="map-error" role="alert"><h1>The map couldn’t start.</h1><p>Try reloading the page to reconnect to Rotterdam.</p><button on:click={() => window.location.reload()}>Reload map</button></div>{/if}
+  {#if mapError}
+    <div class="map-error" role="alert">
+      <h1>{$t('The map couldn’t start.')}</h1>
+      <p>{$t('Try reloading the page to reconnect to Rotterdam.')}</p>
+      <button on:click={() => window.location.reload()}>{$t('Reload map')}</button>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -98,9 +107,6 @@
   }
 
   .map-container :global(canvas:focus-visible) { outline: 2px solid #b0c19a; outline-offset: -4px; }
-  .map-container :global(.maplibregl-ctrl-attrib) { background: #1b231df2; color: #b6c3a8; border: 1px solid #ffffff1c; border-radius: 8px; font: 9px/1.6 system-ui, sans-serif; }
-  .map-container :global(.maplibregl-ctrl-attrib a) { color: inherit; }
-  .map-container :global(.maplibregl-ctrl-attrib-button) { filter: invert(.8); }
   .map-error { position: absolute; inset: 0; display: grid; place-content: center; padding: 25px; background: #191f1a; color: #dce3d1; font: 14px system-ui, sans-serif; }
   .map-error h1 { font: 36px Georgia, serif; }
   .map-error button { padding: 12px; border: 1px solid #9dab8a; border-radius: 8px; background: #303b2a; color: inherit; cursor: pointer; }

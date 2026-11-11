@@ -1,4 +1,31 @@
 import { test, expect } from '@playwright/test';
+
+test('dragging past the west edge keeps the map in its tile coverage and allows a return pan', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/?zoom=13&weather=off');
+  await page.waitForFunction(() => window.map?.isStyleLoaded());
+  const westLimit = await page.evaluate(() => window.map.getStyle().sources.openmaptiles.bounds[0]);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await page.mouse.move(560, 490);
+    await page.mouse.down();
+    await page.mouse.move(1140, 490, { steps: 10 });
+    const westEdge = await page.evaluate(() => window.map.getBounds().getWest());
+    expect(westEdge).toBeGreaterThanOrEqual(westLimit - 0.000001);
+    await page.mouse.up();
+  }
+  await expect.poll(() => page.evaluate(() => window.map.isMoving())).toBe(false);
+  const westCenter = await page.evaluate(() => window.map.getCenter().lng);
+  await page.mouse.move(1140, 490);
+  await page.mouse.down();
+  await page.mouse.move(560, 490, { steps: 10 });
+  await page.mouse.up();
+  await expect.poll(() => page.evaluate(() => window.map.getCenter().lng)).toBeGreaterThan(westCenter + 0.005);
+  const mapTab = page.getByRole('button', { name: 'Map', exact: true });
+  await mapTab.click();
+  await expect(mapTab).toHaveAttribute('aria-pressed', 'true');
+  expect(errors).toEqual([]);
+});
 const feature = { type: 'Feature', id: 'test-event', geometry: { type: 'Point', coordinates: [4.48, 51.92] }, properties: { title: 'An evening by the Maas', venue_name: 'Rotterdam Centrum', description: 'A local programme along the river.' } };
 test('layers load on demand, show selectable results, and clear from the map', async ({ page }) => {
   let requests = 0;

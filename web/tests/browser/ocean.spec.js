@@ -43,7 +43,11 @@ for (const camera of [
   { zoom:20, center:[4.3793095,51.9634066] }
 ]) test(`ocean pixels and precise cutout at zoom ${camera.zoom}`, async ({page}) => {
   const errors=[];page.on('pageerror', e=>errors.push(e.message));
-  await page.evaluate(camera => map.jumpTo(camera), camera);
+  await page.evaluate(camera => {
+    // Sample the renderer's coastline independently of the interaction bounds.
+    map.setMaxBounds(null);
+    map.jumpTo(camera);
+  }, camera);
   await page.waitForFunction(() => map.areTilesLoaded());
   await page.evaluate(() => new Promise(resolve => { map.once('render', resolve); map.triggerRepaint(); }));
   const locations = await page.evaluate(() => {

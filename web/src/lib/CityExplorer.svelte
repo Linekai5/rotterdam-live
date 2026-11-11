@@ -5,6 +5,7 @@
   import { createMapDataController } from './mapDataController.js';
   import { MAP_DATASETS, DATASET_BY_ID, featureTitle, featureSubtitle, normalizeFeature, geometryBounds, intersectsBounds, formatDate } from './explorerData.js';
   import { API_BASE_URL } from './liveLayers.js';
+  import { language, t } from './i18n.js';
   import ExplorerIcon from './ExplorerIcon.svelte';
   import MapAppearance from './MapAppearance.svelte';
   import FeatureDetails from './FeatureDetails.svelte';
@@ -56,6 +57,20 @@
   $: isLimited = Object.values(layers).some(layer => layer.truncated);
   $: failedLayers = Object.entries(layers).filter(([, layer]) => ['error', 'stale'].includes(layer.status));
   $: selectedLayer = layers[selected?.properties.__dataset];
+  $: connectionLabel = $t(apiStatus === 'offline' ? 'Connection lost · retrying'
+    : apiStatus === 'connecting' ? 'Connecting…'
+    : isLoading ? 'Updating selected layers…'
+    : activeCount ? '{count} selected · minute updates' : 'Connected to city data', { count: activeCount });
+
+  const layerStatusLabels = {
+    loading: 'Updating this part of the city…',
+    error: 'Feed temporarily unavailable',
+    stale: 'Last available data · refresh failed'
+  };
+  function layerSummary(layer, dataset, translate) {
+    if (!layer) return translate(dataset.caption);
+    return translate(layerStatusLabels[layer.status] || '{count} in this view', { count: layer.features.length });
+  }
   onMount(() => {
     const breakpoint = window.matchMedia('(max-width: 700px)');
     isMobile = breakpoint.matches;
@@ -143,74 +158,201 @@
 </script>
 
 <div class="city-shell">
-  <header class="identity"><svg class="brand-mark" viewBox="0 0 42 38" fill="none" aria-hidden="true"><path d="M4 31h34M10 31 25 4l5 27M25 4 20 31M25 4l12 24M25 4 5 28" stroke="currentColor" stroke-width="1.3"/><path d="M5 28h32" stroke="currentColor" stroke-width="3"/></svg><div><strong>rotterdam<span>live</span></strong><p>AN OPEN WINDOW ON THE CITY</p></div></header>
-  <button class="mobile-trigger" bind:this={mobileTrigger} on:click={toggleExplorer} aria-expanded={mobileOpen} aria-controls="city-explorer">{mobileOpen ? 'Back to the map' : 'Explore the city'}<span>{activeCount ? `${activeCount} layers` : '+'}</span></button>
-  <button class="desktop-trigger" bind:this={desktopTrigger} aria-label={desktopOpen ? 'Hide explorer' : 'Show explorer'} title={desktopOpen ? 'Hide explorer' : 'Show explorer'} aria-expanded={desktopOpen} aria-controls="city-explorer" on:click={() => desktopOpen = !desktopOpen}><ExplorerIcon name="layers" size={18}/>{#if activeCount}<span>{activeCount}</span>{/if}</button>
-  <aside id="city-explorer" class="explorer" class:desktop-collapsed={!desktopOpen && !isMobile} class:mobile-open={mobileOpen} aria-hidden={!panelVisible} inert={!panelVisible} aria-label="City explorer">
-    <div class="intro"><span class="eyebrow"><span class="section-index">01 /</span> THE CITY AT YOUR FINGERTIPS</span><h1 aria-label="Explore Rotterdam."><span>Explore </span><span>Rotterdam<span class="title-dot">.</span></span></h1><p>A closer look at what moves the city.</p></div>
-    <div class="search-box"><ExplorerIcon name="search" size={17}/><input bind:this={searchInput} aria-label="Search Rotterdam" aria-controls="place-search-results" placeholder="Find a street or a place" bind:value={query} on:input={search} on:keydown={event => {if (event.key === 'ArrowDown' && results.length) {event.preventDefault(); searchResultsEl?.querySelector('button')?.focus();}}}/>{#if query}<button aria-label="Clear search" on:click={() => {query = ''; search(); searchInput?.focus();}}><ExplorerIcon name="close" size={13}/></button>{:else}<kbd aria-hidden="true">⌘ K</kbd>{/if}</div>
+  <header class="identity">
+    <svg class="brand-mark" viewBox="0 0 42 38" fill="none" aria-hidden="true"><path d="M4 31h34M10 31 25 4l5 27M25 4 20 31M25 4l12 24M25 4 5 28" stroke="currentColor" stroke-width="1.3"/><path d="M5 28h32" stroke="currentColor" stroke-width="3"/></svg>
+    <div><strong>rotterdam<span>live</span></strong><p>{$t('AN OPEN WINDOW ON THE CITY')}</p></div>
+  </header>
+  <button class="mobile-trigger" bind:this={mobileTrigger} on:click={toggleExplorer} aria-expanded={mobileOpen} aria-controls="city-explorer">
+    {$t(mobileOpen ? 'Back to the map' : 'Explore the city')}
+    <span>{activeCount ? $t(activeCount === 1 ? '1 layer' : '{count} layers', { count: activeCount }) : '+'}</span>
+  </button>
+  <button class="desktop-trigger" bind:this={desktopTrigger} aria-label={$t(desktopOpen ? 'Hide explorer' : 'Show explorer')}
+    title={$t(desktopOpen ? 'Hide explorer' : 'Show explorer')} aria-expanded={desktopOpen} aria-controls="city-explorer" on:click={() => desktopOpen = !desktopOpen}>
+    <ExplorerIcon name="layers" size={18}/>
+    {#if activeCount}<span>{activeCount}</span>{/if}
+  </button>
+  <aside id="city-explorer" class="explorer" class:desktop-collapsed={!desktopOpen && !isMobile} class:mobile-open={mobileOpen}
+    aria-hidden={!panelVisible} inert={!panelVisible} aria-label={$t('City explorer')}>
+    <div class="intro">
+      <span class="eyebrow"><span class="section-index">01 /</span> {$t('THE CITY AT YOUR FINGERTIPS')}</span>
+      <h1 aria-label={$t('Explore Rotterdam.')}><span>{$t('Explore')} </span><span>Rotterdam<span class="title-dot">.</span></span></h1>
+      <p>{$t('A closer look at what moves the city.')}</p>
+    </div>
+    <div class="search-box">
+      <ExplorerIcon name="search" size={17}/>
+      <input bind:this={searchInput} bind:value={query} aria-label={$t('Search Rotterdam')} aria-controls="place-search-results"
+        placeholder={$t('Find a street or a place')} on:input={search} on:keydown={event => {
+          if (event.key === 'ArrowDown' && results.length) {
+            event.preventDefault();
+            searchResultsEl?.querySelector('button')?.focus();
+          }
+        }}/>
+      {#if query}
+        <button aria-label={$t('Clear search')} on:click={() => { query = ''; search(); searchInput?.focus(); }}><ExplorerIcon name="close" size={13}/></button>
+      {:else}
+        <kbd aria-hidden="true">⌘ K</kbd>
+      {/if}
+    </div>
     {#if query.trim().length >= 2}
-      <div id="place-search-results" class="search-results" bind:this={searchResultsEl} aria-label="Search results" aria-live="polite">
-        {#if searching}<p>Finding your place…</p>{:else if searchError}<p>Search is unavailable. <button class="text-button" on:click={search}>Try again</button></p>{:else if !results.length}<p>No places found. Try another name.</p>{/if}
-        {#each results as result}<button class="search-result" on:click={() => {focus(result); query = ''; search();}}><strong>{featureTitle(result)}</strong><small>{featureSubtitle(result)}</small><span><ExplorerIcon name="arrow" size={13}/></span></button>{/each}
+      <div id="place-search-results" class="search-results" bind:this={searchResultsEl} aria-label={$t('Search results')} aria-live="polite">
+        {#if searching}<p>{$t('Finding your place…')}</p>
+        {:else if searchError}<p>{$t('Search is unavailable.')} <button class="text-button" on:click={search}>{$t('Try again')}</button></p>
+        {:else if !results.length}<p>{$t('No places found. Try another name.')}</p>{/if}
+        {#each results as result}
+          <button class="search-result" on:click={() => { focus(result); query = ''; search(); }}>
+            <strong>{featureTitle(result, $language)}</strong><small>{featureSubtitle(result, $language)}</small>
+            <span><ExplorerIcon name="arrow" size={13}/></span>
+          </button>
+        {/each}
       </div>
     {/if}
-    <nav class="tabs" aria-label="Explorer sections" style={`--tab:${['layers','activity','map'].indexOf(tab)}`}><span class="tab-indicator" aria-hidden="true"></span><button class:active={tab === 'layers'} aria-pressed={tab === 'layers'} on:click={() => setTab('layers')}>Map layers <span>{activeCount.toString().padStart(2, '0')}</span></button><button class:active={tab === 'activity'} aria-pressed={tab === 'activity'} on:click={() => setTab('activity')}>In view <span>{activeFeatures.length}</span></button><button class:active={tab === 'map'} aria-pressed={tab === 'map'} on:click={() => setTab('map')}>Map <ExplorerIcon name="compass" size={13}/></button></nav>
+    <nav class="tabs" aria-label={$t('Explorer sections')} style={`--tab:${['layers', 'activity', 'map'].indexOf(tab)}`}>
+      <span class="tab-indicator" aria-hidden="true"></span>
+      <button class:active={tab === 'layers'} aria-pressed={tab === 'layers'} on:click={() => setTab('layers')}>
+        {$t('Map layers')} <span>{activeCount.toString().padStart(2, '0')}</span>
+      </button>
+      <button class:active={tab === 'activity'} aria-pressed={tab === 'activity'} on:click={() => setTab('activity')}>
+        {$t('In view')} <span>{activeFeatures.length}</span>
+      </button>
+      <button class:active={tab === 'map'} aria-pressed={tab === 'map'} on:click={() => setTab('map')}>
+        {$t('Map')} <ExplorerIcon name="compass" size={13}/>
+      </button>
+    </nav>
     <div class="panel-content" bind:this={panelContent} use:trackOverflow on:scroll={updateScrollCue}>
-      {#key tab}<div class="tab-page" use:trackOverflow in:fly={{x:tabDirection*18,duration:reduceMotion ? 0 : 360,easing:quintOut}}>
-      {#if tab === 'layers'}
-        <div>
-          <div class="category-nav" aria-label="Layer categories">{#each categories as item}<button class:current={category === item} aria-pressed={category === item} on:click={() => category = item}>{item === 'Live city' ? 'City' : item}</button>{/each}</div>
-          <p class="layer-guidance">{activeCount ? `${activeCount} layers on your map. Select another to add it.` : 'Choose a layer. Build your own view.'}</p>
-          {#each ['Discover', 'Move', 'Live city'].filter(group => category === 'All' || category === group) as group (group)}
-            <section class="dataset-group" in:slide={{duration:reduceMotion ? 0 : 320,easing:quintOut}}>
-            <div class="group-title"><span>{group}</span><span>{MAP_DATASETS.filter(dataset => dataset.group === group).length.toString().padStart(2,'0')}</span></div>
-            {#each MAP_DATASETS.filter(dataset => dataset.group === group) as dataset,index (dataset.id)}
-              <div class="layer-block" class:chosen={layers[dataset.id]} style={`--row:${index}`}>
-                <button class="layer-row" aria-label={dataset.label} aria-pressed={!!layers[dataset.id]} on:click={() => toggleLayer(dataset.id)}>
-                  <span class="layer-symbol" style={`--layer-color:${dataset.color}`}><ExplorerIcon name={dataset.icon} size={22}/></span>
-                  <span class="layer-copy"><strong>{dataset.label}</strong><small>{layers[dataset.id]?.status === 'loading' ? 'Updating this part of the city…' : layers[dataset.id]?.status === 'error' ? 'Feed temporarily unavailable' : layers[dataset.id]?.status === 'stale' ? 'Last available data · refresh failed' : layers[dataset.id] ? `${layers[dataset.id].features.length} in this view` : dataset.caption}</small></span>
-                  <span class="toggle" aria-hidden="true"><span></span><span></span></span>
-                </button>
-                {#if layers[dataset.id]}
-                  <div class="layer-options" transition:slide={{duration:reduceMotion ? 0 : 320,easing:quintOut}}>
-                    {#each dataset.filters || [] as filter}
-                      <label><span>{filter.label}</span><select aria-label={`${dataset.label}: ${filter.label}`} value={layers[dataset.id].filters[filter.key] || ''} on:change={event => controller?.setFilters(dataset.id, {[filter.key]: event.currentTarget.value})}>{#each filter.options as [value,label]}<option {value}>{label}</option>{/each}</select></label>
-                    {/each}
-                    {#if ['error','stale'].includes(layers[dataset.id].status)}<p class="feed-error">{layers[dataset.id].error} <button on:click={() => controller?.retry(dataset.id)}>Retry {dataset.label}</button></p>{/if}
-                    {#if layers[dataset.id].status === 'ready' && !layers[dataset.id].features.length}<p class="empty-feed">No {dataset.label.toLowerCase()} in this view. Try another category or move the map.</p>{/if}
-                    {#if dataset.id === 'cameras'}<p class="camera-note">Mapped locations from OpenStreetMap. This source does not provide public video.</p>{/if}
-                    <div class="source-kind">{sourceType(dataset.id)}<span>{dataset.source}</span></div>
-                    {#if layers[dataset.id].truncated}<p class="limit-note">Up to 150 loaded here. Zoom in for a smaller selection.</p>{/if}
-                    {#if ['crowd','traffic'].includes(dataset.id)}<div class="legend"><span>{dataset.id === 'crowd' ? 'Quiet' : 'Free flow'}</span><i style="background:#9dac8c"></i><i style="background:#c2b18d"></i><i style="background:#b18e79"></i><i style="background:#a77670"></i><span>{dataset.id === 'crowd' ? 'Busy · estimate' : 'Delayed'}</span></div>{/if}
-                    <button class="browse-layer" on:click={() => {focusedLayer = dataset.id; setTab('activity');}}>Explore {dataset.label.toLowerCase()}<ExplorerIcon name="arrow" size={11}/></button>
+      {#key tab}
+        <div class="tab-page" use:trackOverflow in:fly={{ x: tabDirection * 18, duration: reduceMotion ? 0 : 360, easing: quintOut }}>
+          {#if tab === 'layers'}
+            <div class="category-nav" aria-label={$t('Layer categories')}>
+              {#each categories as item}
+                <button class:current={category === item} aria-pressed={category === item} on:click={() => category = item}>{$t(item === 'Live city' ? 'City' : item)}</button>
+              {/each}
+            </div>
+            <p class="layer-guidance">
+              {#if activeCount}
+                {$t(activeCount === 1 ? '1 layer on your map. Select another to add it.' : '{count} layers on your map. Select another to add it.', { count: activeCount })}
+              {:else}
+                {$t('Choose a layer. Build your own view.')}
+              {/if}
+            </p>
+            {#each ['Discover', 'Move', 'Live city'].filter(group => category === 'All' || category === group) as group (group)}
+              {@const datasets = MAP_DATASETS.filter(dataset => dataset.group === group)}
+              <section class="dataset-group" in:slide={{ duration: reduceMotion ? 0 : 320, easing: quintOut }}>
+                <div class="group-title"><span>{$t(group)}</span><span>{datasets.length.toString().padStart(2, '0')}</span></div>
+                {#each datasets as dataset, index (dataset.id)}
+                  {@const layer = layers[dataset.id]}
+                  {@const label = $t(dataset.label)}
+                  <div class="layer-block" class:chosen={layer} style={`--row:${index}`}>
+                    <button class="layer-row" aria-label={label} aria-pressed={!!layer} on:click={() => toggleLayer(dataset.id)}>
+                      <span class="layer-symbol" style={`--layer-color:${dataset.color}`}><ExplorerIcon name={dataset.icon} size={22}/></span>
+                      <span class="layer-copy"><strong>{label}</strong><small>{layerSummary(layer, dataset, $t)}</small></span>
+                      <span class="toggle" aria-hidden="true"><span></span><span></span></span>
+                    </button>
+                    {#if layer}
+                      <div class="layer-options" transition:slide={{ duration: reduceMotion ? 0 : 320, easing: quintOut }}>
+                        {#each dataset.filters || [] as filter}
+                          <label>
+                            <span>{$t(filter.label)}</span>
+                            <select aria-label={`${label}: ${$t(filter.label)}`} value={layer.filters[filter.key] || ''}
+                              on:change={event => controller?.setFilters(dataset.id, { [filter.key]: event.currentTarget.value })}>
+                              {#each filter.options as [value, optionLabel]}<option {value}>{$t(optionLabel)}</option>{/each}
+                            </select>
+                          </label>
+                        {/each}
+                        {#if ['error', 'stale'].includes(layer.status)}
+                          <p class="feed-error">{$t(layer.error)} <button on:click={() => controller?.retry(dataset.id)}>{$t('Retry {layer}', { layer: label })}</button></p>
+                        {/if}
+                        {#if layer.status === 'ready' && !layer.features.length}
+                          <p class="empty-feed">{$t('No {layer} in this view. Try another category or move the map.', { layer: label.toLowerCase() })}</p>
+                        {/if}
+                        {#if dataset.id === 'cameras'}
+                          <p class="camera-note">{$t('Mapped locations from OpenStreetMap. This source does not provide public video.')}</p>
+                        {/if}
+                        <div class="source-kind">{$t(sourceType(dataset.id))}<span>{$t(dataset.source)}</span></div>
+                        {#if layer.truncated}<p class="limit-note">{$t('Up to 150 loaded here. Zoom in for a smaller selection.')}</p>{/if}
+                        {#if ['crowd', 'traffic'].includes(dataset.id)}
+                          <div class="legend">
+                            <span>{$t(dataset.id === 'crowd' ? 'Quiet' : 'Free flow')}</span>
+                            <i style="background:#9dac8c"></i><i style="background:#c2b18d"></i><i style="background:#b18e79"></i><i style="background:#a77670"></i>
+                            <span>{$t(dataset.id === 'crowd' ? 'Busy · estimate' : 'Delayed')}</span>
+                          </div>
+                        {/if}
+                        <button class="browse-layer" on:click={() => { focusedLayer = dataset.id; setTab('activity'); }}>
+                          {$t('Explore {layer}', { layer: label.toLowerCase() })}<ExplorerIcon name="arrow" size={11}/>
+                        </button>
+                      </div>
+                    {/if}
                   </div>
-                {/if}
-              </div>
+                {/each}
+              </section>
             {/each}
-            </section>
-          {/each}
+          {:else if tab === 'activity'}
+            <div class="activity-heading">
+              <span>{$t(isLoading ? 'Updating your view…' : 'Selected layers · current view')}</span>
+              <span>{$t('{count} places & reports', { count: activeFeatures.length })}</span>
+            </div>
+            {#if activeCount}
+              <div class="filter-chips" aria-label={$t('Filter results by layer')}>
+                <button class:current={!focusedLayer} aria-pressed={!focusedLayer} on:click={() => { focusedLayer = null; listLimit = 40; }}>{$t('All')}</button>
+                {#each Object.keys(layers) as id}
+                  <button class:current={focusedLayer === id} aria-pressed={focusedLayer === id} on:click={() => { focusedLayer = id; listLimit = 40; }}>{$t(DATASET_BY_ID[id].label)}</button>
+                {/each}
+              </div>
+            {/if}
+            {#each failedLayers as [id, layer]}
+              <p class="feed-error">{$t(DATASET_BY_ID[id].label)}: {$t(layer.status === 'stale' ? 'showing last available records' : 'currently unavailable')}. <button on:click={() => controller?.retry(id)}>{$t('Retry')}</button></p>
+            {/each}
+            {#if !activeCount}
+              <div class="empty-state">
+                <ExplorerIcon name="layers" size={36}/><span>{$t('Your city. Your perspective.')}</span>
+                <p>{$t('Select a map layer to see places and reports in the current view.')}</p>
+                <button on:click={() => setTab('layers')}>{$t('Choose a layer')} <ExplorerIcon name="arrow" size={14}/></button>
+              </div>
+            {:else if isLoading && !visibleItems.length}
+              <div class="skeleton-list" aria-label={$t('Loading results')}><i></i><i></i><i></i></div>
+            {:else if !visibleItems.length}
+              <div class="empty-state">
+                <span>{$t('Nothing in this view yet.')}</span>
+                <p>{$t('Move the map, change a filter, or try another layer. New results appear when you stop moving.')}</p>
+              </div>
+            {/if}
+            {#each visibleItems as feature, index (`${feature.properties.__dataset}-${feature.id || feature.properties.id || index}`)}
+              <button class="result-row" style={`--row:${Math.min(index, 8)}`} on:click={() => focus(feature)}>
+                <span class="result-symbol"><ExplorerIcon name={DATASET_BY_ID[feature.properties.__dataset]?.icon || 'pin'} size={19}/></span>
+                <strong>{featureTitle(feature, $language)}</strong><small>{featureSubtitle(feature, $language)}</small>
+                <span class="result-arrow"><ExplorerIcon name="arrow" size={14}/></span>
+                {#if feature.properties.start_time}<time>{formatDate(feature.properties.start_time, true, $language)}</time>{/if}
+              </button>
+            {/each}
+            {#if activeFeatures.length > listLimit}
+              <button class="load-more" on:click={() => listLimit += 40}>{$t('Show more in this view')} <span>+{Math.min(40, activeFeatures.length - listLimit)}</span></button>
+            {/if}
+            {#if isLimited}<p class="limit-note">{$t('Some layers have more records. Zoom in to explore a smaller area.')}</p>{/if}
+          {:else}
+            <MapAppearance {map} {weatherController} {weatherState} bind:mode={viewMode} bind:labels={placeLabels} bind:buildings={buildingHeights}/>
+          {/if}
         </div>
-      {:else if tab === 'activity'}
-        <div>
-          <div class="activity-heading"><span>{isLoading ? 'Updating your view…' : 'Selected layers · current view'}</span><span>{activeFeatures.length} places & reports</span></div>
-          {#if activeCount}<div class="filter-chips" aria-label="Filter results by layer"><button class:current={!focusedLayer} aria-pressed={!focusedLayer} on:click={() => {focusedLayer = null; listLimit = 40;}}>All</button>{#each Object.keys(layers) as id}<button class:current={focusedLayer === id} aria-pressed={focusedLayer === id} on:click={() => {focusedLayer = id; listLimit = 40;}}>{DATASET_BY_ID[id].label}</button>{/each}</div>{/if}
-          {#each failedLayers as [id,layer]}<p class="feed-error">{DATASET_BY_ID[id].label}: {layer.status === 'stale' ? 'showing last available records' : 'currently unavailable'}. <button on:click={() => controller?.retry(id)}>Retry</button></p>{/each}
-          {#if !activeCount}<div class="empty-state"><ExplorerIcon name="layers" size={36}/><span>Your city. Your perspective.</span><p>Select a map layer to see places and reports in the current view.</p><button on:click={() => setTab('layers')}>Choose a layer <ExplorerIcon name="arrow" size={14}/></button></div>{:else if isLoading && !visibleItems.length}<div class="skeleton-list" aria-label="Loading results"><i></i><i></i><i></i></div>{:else if !visibleItems.length}<div class="empty-state"><span>Nothing in this view yet.</span><p>Move the map, change a filter, or try another layer. New results appear when you stop moving.</p></div>{/if}
-          {#each visibleItems as feature, index (`${feature.properties.__dataset}-${feature.id || feature.properties.id || index}`)}<button class="result-row" style={`--row:${Math.min(index,8)}`} on:click={() => focus(feature)}><span class="result-symbol"><ExplorerIcon name={DATASET_BY_ID[feature.properties.__dataset]?.icon || 'pin'} size={19}/></span><strong>{featureTitle(feature)}</strong><small>{featureSubtitle(feature)}</small><span class="result-arrow"><ExplorerIcon name="arrow" size={14}/></span>{#if feature.properties.start_time}<time>{formatDate(feature.properties.start_time)}</time>{/if}</button>{/each}
-          {#if activeFeatures.length > listLimit}<button class="load-more" on:click={() => listLimit += 40}>Show more in this view <span>+{Math.min(40,activeFeatures.length - listLimit)}</span></button>{/if}
-          {#if isLimited}<p class="limit-note">Some layers have more records. Zoom in to explore a smaller area.</p>{/if}
-        </div>
-      {:else}
-        <div><MapAppearance {map} {weatherController} {weatherState} bind:mode={viewMode} bind:labels={placeLabels} bind:buildings={buildingHeights}/></div>
-      {/if}
-      </div>{/key}
+      {/key}
     </div>
-    <div class="scroll-cue" class:shown={scrollMore} aria-hidden="true">More below <span>↓</span></div>
-    <footer><span class="connection" class:offline={apiStatus === 'offline'} aria-live="polite"><i></i>{apiStatus === 'offline' ? 'Connection lost · retrying' : apiStatus === 'connecting' ? 'Connecting…' : isLoading ? 'Updating selected layers…' : activeCount ? `${activeCount} selected · minute updates` : 'Connected to city data'}</span>{#if activeCount}<button on:click={() => {controller?.clear(); controller?.select(null);}}>Clear all</button>{:else}<span class="coordinates">{MAP_DATASETS.length} LAYERS</span>{/if}</footer>
+    <div class="scroll-cue" class:shown={scrollMore} aria-hidden="true">{$t('More below')} <span>↓</span></div>
+    <footer>
+      <span class="connection" class:offline={apiStatus === 'offline'} aria-live="polite"><i></i>{connectionLabel}</span>
+      {#if activeCount}
+        <button on:click={() => { controller?.clear(); controller?.select(null); }}>{$t('Clear all')}</button>
+      {:else}
+        <span class="coordinates">{MAP_DATASETS.length} {$t('LAYERS')}</span>
+      {/if}
+    </footer>
   </aside>
-  {#if hovered && !selected}<div class="map-tooltip" style={`left:${Math.max(12,Math.min(hovered.point.x + 18, (map.getContainer()?.clientWidth || 1200) - 265))}px;top:${Math.max(12,Math.min(hovered.point.y - 16,(map.getContainer()?.clientHeight || 900) - 160))}px`}><span>{DATASET_BY_ID[hovered.feature.properties.__dataset]?.label || 'Location'}</span><strong>{featureTitle(hovered.feature)}</strong><small>Select to explore ↗</small></div>{/if}
-  {#if selected}<FeatureDetails feature={selected} layerState={selectedLayer} reducedMotion={reduceMotion} canFocus={canFocus(selected)} explorerOpen={desktopOpen} onClose={closeSelection} onFocus={() => moveTo(selected)}/>{/if}
+  {#if hovered && !selected}
+    <div class="map-tooltip" style={`left:${Math.max(12, Math.min(hovered.point.x + 18, map.getContainer().clientWidth - 265))}px;top:${Math.max(12, Math.min(hovered.point.y - 16, map.getContainer().clientHeight - 160))}px`}>
+      <span>{$t(DATASET_BY_ID[hovered.feature.properties.__dataset]?.label || 'Location')}</span>
+      <strong>{featureTitle(hovered.feature, $language)}</strong><small>{$t('Select to explore')} ↗</small>
+    </div>
+  {/if}
+  {#if selected}
+    <FeatureDetails feature={selected} layerState={selectedLayer} reducedMotion={reduceMotion} canFocus={canFocus(selected)}
+      explorerOpen={desktopOpen} onClose={closeSelection} onFocus={() => moveTo(selected)}/>
+  {/if}
 </div>
 <style>
   .city-shell { --explorer-width:354px; --explorer-inset:24px; --ink:#efeee7; --muted:#a1a79f; --edge:#ffffff19; --surface:#171a19; --accent:#bdc9b0; position:absolute; inset:0; z-index:10; pointer-events:none; color:var(--ink); font:13px 'Instrument Sans','Helvetica Neue',Arial,sans-serif; }
@@ -283,7 +425,7 @@
     .explorer::before { content:''; width:30px; height:3px; background:#b5c4a546; border-radius:3px; margin:10px auto 0; flex-shrink:0; } .search-box { margin:7px 22px 4px; padding:12px 0; } .search-box kbd { display:none; } .tabs { margin:0 20px; } .tabs button { padding:15px 0; }
     .panel-content { max-height:46dvh; padding-top:0; } .category-nav { margin-top:15px; } .layer-guidance { margin-bottom:16px; } .layer-row { padding:14px 10px; } footer { padding:13px 20px; }
     .category-nav button { min-height:44px; } .filter-chips button { min-height:40px; }
-    .mobile-trigger { position:absolute; pointer-events:auto; display:flex; justify-content:space-between; align-items:center; left:16px; right:16px; bottom:31px; padding:17px 19px; border:1px solid #c3ceb450; border-radius:3px; background:#1a2118fa; color:#e4ebdb; font-size:13px; box-shadow:0 4px 24px #0003; }
+    .mobile-trigger { position:absolute; pointer-events:auto; display:flex; justify-content:space-between; align-items:center; left:16px; right:110px; bottom:31px; padding:17px 14px; border:1px solid #c3ceb450; border-radius:3px; background:#1a2118fa; color:#e4ebdb; font-size:13px; box-shadow:0 4px 24px #0003; }
     .mobile-trigger>span { font-size:11px; color:#afbd9e; }    .map-tooltip { display:none; }
   }
   @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; } }
