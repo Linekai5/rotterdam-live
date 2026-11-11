@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openMap } from './navigation.js';
 import { PNG } from 'pngjs';
 import { readFileSync } from 'node:fs';
 import { booleanPointInPolygon, point } from '@turf/turf';
@@ -30,7 +31,7 @@ test.beforeEach(async ({ page }) => {
     : route.fulfill({contentType:'application/x-protobuf',body:Buffer.alloc(0)}));
   await page.route('**/tiles/satellite/**', route => route.fulfill({ contentType:'image/png', body:fixture }));
   await page.route('**/tiles/vector/**', route => route.fulfill({ contentType:'application/x-protobuf', body:Buffer.alloc(0) }));
-  await page.goto('/?mode=satellite&zoom=11&weather=off');
+  await openMap(page, '/?mode=satellite&zoom=11&weather=off');
   await page.waitForFunction(() => window.map?.getLayer('coastal-ocean')?.implementation?.program);
   await page.addStyleTag({ content: '.city-shell, .weather-hud, .layer-control-wrapper {display:none!important}' });
 });

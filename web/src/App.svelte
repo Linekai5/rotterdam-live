@@ -1,6 +1,9 @@
 <script>
   import MapComponent from './lib/MapComponent.svelte';
+  import WelcomeBanner from './lib/WelcomeBanner.svelte';
   import { language, setLanguage, t } from './lib/i18n.js';
+
+  let welcomeVisible = true;
 
   $: document.documentElement.lang = $language;
 </script>
@@ -15,6 +18,9 @@
     <button type="button" lang="nl" aria-label="Nederlands" aria-pressed={$language === 'nl'} on:click={() => setLanguage('nl')}>NL</button>
     <button type="button" lang="en" aria-label="English" aria-pressed={$language === 'en'} on:click={() => setLanguage('en')}>EN</button>
   </div>
+  {#if welcomeVisible}
+    <WelcomeBanner onDismiss={() => welcomeVisible = false} />
+  {/if}
 </main>
 
 <style>

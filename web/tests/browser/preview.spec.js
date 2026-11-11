@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openMap } from './navigation.js';
 
 test('the built preview serves its API on the same origin without localhost CORS failures', async ({ browser }) => {
   const origin = process.env.WEB_PREVIEW_ORIGIN;
@@ -12,7 +13,7 @@ test('the built preview serves its API on the same origin without localhost CORS
   });
   page.on('pageerror', error => errors.push(error.message));
   try {
-    await page.goto(origin);
+    await openMap(page, origin);
     await expect(page.getByRole('heading', { name: 'Explore Rotterdam.' })).toBeVisible();
     const health = await page.request.get(`${origin}/health/live`);
     expect(health.status()).toBe(200);

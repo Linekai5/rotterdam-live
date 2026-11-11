@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openMap } from './navigation.js';
 
 const items = ['concert', 'festival', 'theatre', 'exhibition', 'stadium_fixture'].map((subcategory, index) => ({
   type: 'Feature', id: `drawing-${index}`, geometry: { type: 'Point', coordinates: [4.435 + index * 0.025, 51.93] }, properties: { title: `${subcategory} programme`, subcategory }
@@ -8,7 +9,7 @@ test('bespoke SVG event markers render as distinct retina symbols and survive st
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/api/v1/events?**', route => route.fulfill({ json: { type: 'FeatureCollection', features: items } }));
-  await page.goto('/?weather=off');
+  await openMap(page, '/?weather=off');
   await page.getByRole('button', { name: 'What’s on', exact: true }).click();
   await expect.poll(() => page.evaluate(() => {
     const map = window.map;
@@ -35,7 +36,7 @@ test('bespoke SVG event markers render as distinct retina symbols and survive st
 });
 
 test('every bespoke glyph decodes locally into a visible SVG sprite', async ({ page }) => {
-  await page.goto('/?weather=off');
+  await openMap(page, '/?weather=off');
   const result = await page.evaluate(async () => {
     const { ICON_PATHS, markerSvg, rasterizeSymbol } = await import('/src/lib/mapSymbols.js');
     const kinds = ['event', 'concert', 'festival', 'theatre', 'exhibition', 'football', 'bridge', 'camera', 'parking', 'shop', 'bakery', 'pharmacy', 'water', 'toilet', 'aed', 'charging', 'news', 'report', 'leaf', 'works', 'weather', 'cluster'];

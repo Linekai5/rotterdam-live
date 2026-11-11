@@ -1,6 +1,10 @@
 export const dutch = {
   // App and explorer
   'Language': 'Taal',
+  'Development notice': 'Ontwikkelingsmelding',
+  'Dismiss development notice': 'Ontwikkelingsmelding sluiten',
+  'Rotterdam Live is still in active development. Some things might not work yet.': 'Rotterdam Live is nog volop in ontwikkeling. Sommige onderdelen werken mogelijk nog niet.',
+  'Click anywhere to explore': 'Klik ergens om de stad te ontdekken',
   'Rotterdam Live — Explore the city': 'Rotterdam Live — Ontdek de stad',
   'The map couldn’t start.': 'De kaart kon niet worden geladen.',
   'Try reloading the page to reconnect to Rotterdam.': 'Laad de pagina opnieuw om verbinding te maken.',
