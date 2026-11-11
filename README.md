@@ -59,10 +59,12 @@ runners to check the public tree, test/build the frontend and validate Nginx.
 
 ## Publication status
 
-This branch prepares the current files for publication. Earlier commits still
-contain the backend and historical operational details. Merging this branch
-would preserve those commits. Follow [the publication notes](docs/publication.md)
-before changing repository visibility or updating an existing deployment checkout.
+Both branch histories have been sanitized. Old pull-request references and
+cached commit views still require GitHub Support cleanup before publication.
+The repository remains private, Actions are disabled and no self-hosted runners
+are attached. Follow [the publication notes](docs/publication.md) before changing
+visibility or updating an existing deployment checkout. Public visibility
+exposes every branch, including `malidev`.
 
 ## Map data and credits
 

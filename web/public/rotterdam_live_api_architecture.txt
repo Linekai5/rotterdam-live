@@ -1,13 +1,13 @@
 # Rotterdam Live — City Explorer & Live Weather Architecture
 
-Architecture revision 2.8.0 · 11 November 2026 · Development branch: `malidev`
+Architecture revision 2.8.1 · 11 November 2026 · Development branch: `malidev`
 
 This public overview describes the current development implementation. The session
 changes have not been deployed to production. The full repository specification is
 `rotterdam_live_api_architecture.txt` at the repository root; its repository mirrors
 include `docs/artifacts/rotterdam_live_master_architecture.md`. The backend
 under `api/` is supplied privately and excluded from the tracked source tree.
-Repository history still requires separate clearance before publication; see
+Branch histories have been sanitized; GitHub PR refs and cached views still require Support clearance before publication; see
 `docs/publication.md` in the repository. Public CI does not deploy.
 
 ## Data flow
