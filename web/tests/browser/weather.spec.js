@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openMap, dismissWelcome } from './navigation.js';
 import { ROTTERDAM_WEATHER_NODES } from '../../src/lib/weatherEngine.js';
 
 const weatherSnapshot = () => ({
@@ -17,7 +18,7 @@ test('model clouds render on Aerial and clear when switching to Night or Atlas',
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await mockWeather(page);
-  await page.goto('/');
+  await openMap(page, '/');
   await expect(page.getByRole('button', { name: 'Rotterdam weather details' })).toContainText('82%');
   expect(await page.evaluate(() => window.weatherController.getState().enabled)).toBe(true);
   await page.waitForFunction(() => {
@@ -85,7 +86,7 @@ test('NL/EN switches the interface and weather in place, saves the choice, and f
       properties: { title: 'Concert aan de Maas', subcategory: 'concert', start_time: '2027-01-06T20:00:00+01:00' }
     }] } });
   });
-  await page.goto('/?weather=off');
+  await openMap(page, '/?weather=off');
   const html = page.locator('html');
   await expect(html).toHaveAttribute('lang', 'en');
   await expect(page.getByRole('button', { name: 'Rotterdam weather details' })).toContainText('Fog');
@@ -110,6 +111,7 @@ test('NL/EN switches the interface and weather in place, saves the choice, and f
   await expect(details).toContainText('Datum en tijd');
 
   await page.reload();
+  await dismissWelcome(page);
   await expect(html).toHaveAttribute('lang', 'nl');
   await page.getByRole('button', { name: 'Kaart', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Luchtfoto', exact: true })).toBeVisible();
@@ -132,7 +134,7 @@ test('weather dashboard owns the Rotterdam clock and toggles between full and co
   await page.clock.setFixedTime(referenceTime);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await mockWeather(page);
-  await page.goto('/?weather=off');
+  await openMap(page, '/?weather=off');
   const panel = page.getByRole('complementary', { name: 'Rotterdam weather', exact: true });
   const toggle = panel.getByRole('button', { name: 'Rotterdam weather details' });
   const clock = panel.getByLabel('Current Rotterdam date and time');
@@ -162,7 +164,7 @@ test('mobile weather starts compact and can expand without horizontal overflow',
   await mockWeather(page);
   for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 740 });
-    await page.goto('/?weather=off');
+    await openMap(page, '/?weather=off');
     const panel = page.getByRole('complementary', { name: 'Rotterdam weather', exact: true });
     const toggle = panel.getByRole('button', { name: 'Rotterdam weather details' });
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');
