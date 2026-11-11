@@ -37,7 +37,7 @@ class DeploymentTests(unittest.TestCase):
             raise subprocess.CalledProcessError(1, args)
 
     def response(self, url, **kwargs):
-        data = {'status': 'alive'} if '/health/live' in url else {'sha': 'wrong' if self.bad_version else SHA}
+        data = {'status': 'ready', 'database': {'connected': True}, 'redis': {'connected': True}} if '/health/ready' in url else {'sha': 'wrong' if self.bad_version else SHA}
         return io.StringIO(json.dumps(data))
 
     def execute(self):
@@ -96,3 +96,10 @@ class DeploymentTests(unittest.TestCase):
         self.failure = lambda args: args[:2] == ('docker', 'tag')
         self.execute()
         self.assertIn(('docker', 'commit', 'rotterdam_live_web', 'rotterdam_live_web:rollback'), self.calls)
+
+    def test_incompatible_live_weather_blocks_release_before_activation(self):
+        self.failure = lambda args: 'scripts/check-live-weather.mjs' in args
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.execute()
+        self.assertFalse(any(c[:2] == ('docker', 'compose') for c in self.calls))
+        self.assertFalse((self.root / 'state/deployed.json').exists())

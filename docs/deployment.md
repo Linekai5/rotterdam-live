@@ -7,13 +7,15 @@ runs validation; deployment also independently runs frontend tests before activa
 The host entrypoint is installed from `scripts/deployment/deploy.py` outside the
 source checkout. It fetches main without resetting the production working tree,
 exports only `web/` to a temporary directory, builds the Docker image, runs unit
-tests, and replaces only the frontend service. The private backend, database,
+tests, checks the live API through the actual frontend weather controller, and
+replaces only the frontend service. The private backend, database,
 worker, environment files and gateway configuration remain provisioned on the host.
 Changes to those private services or the deployment entrypoint require a separate
 operator deployment. Frontend changes on main deploy automatically.
 
 A release is successful only after the frontend container is healthy, the public
-`/version.json` returns the exact commit, and `/health/live` reports alive. A failed
+`/version.json` returns the exact commit, and `/health/ready` confirms database and Redis connectivity. A preflight
+check rejects releases whose weather contract is incompatible with the backend. A failed
 activation restores the previous image and retries on the next timer invocation.
 Build or test failures leave the existing frontend running. The initial deployment
 and container recreation can briefly interrupt frontend requests.

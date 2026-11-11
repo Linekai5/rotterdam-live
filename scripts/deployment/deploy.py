@@ -58,6 +58,8 @@ def main():
         # Build and test before touching the running container.
         run('docker', 'build', '--target', 'builder', '-t', f'{image}-builder', release / 'web')
         run('docker', 'run', '--rm', f'{image}-builder', 'npm', 'test')
+        # Exercise the real frontend controller against the production backend.
+        run('docker', 'run', '--rm', f'{image}-builder', 'node', 'scripts/check-live-weather.mjs', url)
         run('docker', 'build', '-t', image, release / 'web')
         override = release / 'override.json'
 
@@ -77,9 +79,10 @@ def main():
                         actual = json.load(response)['sha']
                     if actual != sha:
                         raise RuntimeError(f'Expected {sha}, served {actual}')
-                    with urllib.request.urlopen(url + '/health/live', timeout=15) as response:
-                        if json.load(response)['status'] != 'alive':
-                            raise RuntimeError('API liveness check failed')
+                    with urllib.request.urlopen(url + '/health/ready', timeout=15) as response:
+                        health = json.load(response)
+                        if not health.get('database', {}).get('connected') or not health.get('redis', {}).get('connected'):
+                            raise RuntimeError('Backend dependencies are not ready')
                     break
                 except Exception:
                     if attempt == 14:
