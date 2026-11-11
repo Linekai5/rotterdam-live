@@ -6,30 +6,35 @@ Git index leaves this machine's private files in place. IP literals have been
 removed from tracked documentation, including the architecture text copies.
 Production bind addresses and database passwords are supplied privately.
 
-## History still needs a release decision
+## History cleanup and publication
 
 The repository's existing commits still contain backend source, server addresses
 and previously committed database credential defaults. A normal merge, squash
 merge or `.gitignore` update does not erase history from the existing repository.
 Do not make the current repository public on the strength of this cleanup alone.
 
-The least disruptive release route is to retain this repository privately and
-initialize a separate public repository from a reviewed export of the cleaned
-commit. Export the committed tree with `git archive`, rather than copying the
-working directory, which still contains ignored private files. The public
-repository must start with a new initial commit and no private branches or tags.
-No new repository has been published by this change.
+The existing repository is being retained. A private bundle of the original
+history and an isolated sanitized mirror are prepared outside the working
+checkout. The rewrite removes backend paths from before and after the monorepo
+migration and redacts deployment addresses and credential literals throughout
+historical files and messages. Changes to commit IDs require other clones to be
+recloned or carefully rebased; merging old history back would undo the cleanup.
 
-Keeping the current repository URL instead requires a coordinated history
-rewrite across affected branches/tags and cleanup of pull-request references
-and cached views where necessary. That changes commit IDs and requires explicit
-approval before force-pushing. Do not push an old clone back into the cleaned
-repository. GitHub documents the consequences and additional cleanup in
-[Removing sensitive data from a repository](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository).
+Four closed pull requests retain old references that cannot be replaced by a
+normal Git push. After the branch rewrite, GitHub Support must remove affected
+pull-request references and cached views before this existing repository is
+made public again. A history rewrite by itself cannot erase other people's
+copies of data already obtained. See
+[GitHub's removal procedure](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository).
+
+The repository is private during cleanup. Actions are disabled and the
+repository's self-hosted runner has been detached. Keep deployments in trusted
+private automation. A public repository exposes all of its branches, including
+`malidev`; branch protection does not make a branch private.
 
 Rotate any real credentials that used committed values before publication.
 Changing a Compose variable alone does not change an existing database password.
-This branch does not rotate production credentials or alter repository visibility.
+This change does not rotate production credentials. They must be reviewed separately if committed values were ever used.
 
 ## Existing development and deployment checkouts
 
