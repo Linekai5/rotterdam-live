@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { switchStyle, toggleLabels, toggle3DBuildings } from './map.js';
   import ExplorerIcon from './ExplorerIcon.svelte';
+  import { t } from './i18n.js';
   export let map;
   export let weatherController;
   export let weatherState;
@@ -12,7 +13,12 @@
   let styleTimer;
   let settleTimer;
   let styleMessage = '';
-  const views = [{id:'satellite',label:'Aerial',description:'The city from above'}, {id:'dark',label:'Night',description:'A quieter street map'}, {id:'clean',label:'Atlas',description:'Clear cartographic detail'}];
+  const views = [
+    { id: 'satellite', label: 'Aerial' },
+    { id: 'dark', label: 'Night' },
+    { id: 'clean', label: 'Atlas' }
+  ];
+  $: aerial = mode === 'satellite';
   function loaded() { if (!changing) return; changing = false; styleMessage = ''; clearTimeout(styleTimer); clearTimeout(settleTimer); settleTimer = null; toggleLabels(map, labels); toggle3DBuildings(map, buildings); }
   function styleChanged() {
     if (changing && !settleTimer) settleTimer = setTimeout(loaded, 250);
@@ -31,12 +37,12 @@
   }
 </script>
 <div class="appearance">
-  <div class="section-kicker"><span>YOUR PERSPECTIVE</span><span aria-hidden="true">03 / VIEWS</span></div>
-  <h2>Shape your view.</h2>
-  <p class="introduction">Three ways to read Rotterdam.</p>
-  <div class="view-options" aria-label="Base map">
+  <div class="section-kicker"><span>{$t('YOUR PERSPECTIVE')}</span><span aria-hidden="true">03 / {$t('VIEWS')}</span></div>
+  <h2>{$t('Shape your view.')}</h2>
+  <p class="introduction">{$t('Three ways to read Rotterdam.')}</p>
+  <div class="view-options" aria-label={$t('Base map')}>
     {#each views as view, index}
-      <button class:active={mode === view.id} aria-label={view.label} aria-pressed={mode === view.id} on:click={() => chooseMode(view.id)}>
+      <button class:active={mode === view.id} aria-label={$t(view.label)} aria-pressed={mode === view.id} on:click={() => chooseMode(view.id)}>
         <span class="preview {view.id}">
           <svg viewBox="0 0 96 82" fill="none" aria-hidden="true">
             <g class="city-blocks"><path d="M5 7h18v12H5zM29 5h21v16H29zM57 2h18v13H57zM79 7h14v20H79zM5 27h17v12H5zM29 28h16v8H29zM60 23h15v13H60zM11 64h15v12H11zM32 62h17v16H32zM58 61h17v15H58zM80 55h15v20H80z"/></g>
@@ -48,23 +54,33 @@
           </svg>
           <span class="view-number">0{index + 1}</span>
         </span>
-        <span class="view-label"><strong>{view.label}</strong><svg class="view-check" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg></span>
+        <span class="view-label"><strong>{$t(view.label)}</strong><svg class="view-check" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg></span>
       </button>
     {/each}
   </div>
-  <div class="style-status" class:changing aria-live="polite"><span aria-hidden="true">{changing ? '↻' : '↳'}</span>{changing ? 'Changing perspective…' : styleMessage || 'Selected data stays with you.'}</div>
-  <div class="control-heading"><span>MAP DETAILS</span><span aria-hidden="true">01</span></div>
-  <div class="preference"><div><strong>Place names</strong><small>Streets & neighbourhood labels</small></div><button class="toggle" class:enabled={labels} role="switch" aria-checked={labels} aria-label="Place names" on:click={() => {labels = !labels; toggleLabels(map, labels);}}><i></i></button></div>
-  <div class="preference"><div><strong>Building heights</strong><small>Explore the city in three dimensions</small></div><button class="toggle" class:enabled={buildings} role="switch" aria-checked={buildings} aria-label="Building heights" on:click={() => {buildings = !buildings; toggle3DBuildings(map, buildings);}}><i></i></button></div>
-  <div class="control-heading atmosphere-heading"><span>LIVE ATMOSPHERE</span><span aria-hidden="true">02</span></div>
-  <div class="preference"><div><strong>Cloud atmosphere</strong><small>{weatherState?.status === 'live' && weatherState?.cloudCoverPct === 0 ? 'Current model: clear over Centrum' : 'Model-driven clouds & soft shadows'}</small></div><button class="toggle" class:enabled={weatherState?.enabled} role="switch" aria-checked={!!weatherState?.enabled} aria-label="Cloud atmosphere" on:click={() => weatherController?.setEnabled(!weatherState?.enabled)}><i></i></button></div>
-  <div class="preference"><div><strong>Rain radar</strong><small>Latest observed rain · loads on request</small></div><button class="toggle" class:enabled={weatherState?.radarEnabled} role="switch" aria-checked={!!weatherState?.radarEnabled} aria-label="Rain radar" on:click={() => weatherController?.setRadarEnabled(!weatherState?.radarEnabled)}><i></i></button></div>
-  {#if weatherState?.radarEnabled && !weatherState?.radarAt}<p class="hint" role="status">A recent radar frame isn’t available yet. We’ll try again automatically.</p>{/if}
-  <div class="map-guidance"><span class="guidance-icon"><ExplorerIcon name="compass" size={25}/></span><div><strong>A change of angle.</strong><p>Scroll to zoom. Drag to move. Hold Ctrl and drag to tilt and turn the map.</p></div></div>
-  <section class="attribution" aria-label="Map credits">
-    <h3>Map credits</h3>
-    <p>Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a> · <a href="https://openfreemap.org/" target="_blank" rel="noopener noreferrer">OpenFreeMap</a></p>
-    <p>Aerial imagery, 2026: <a href="https://www.beeldmateriaal.nl/" target="_blank" rel="noopener noreferrer">Samenwerkingsverband Beeldmateriaal</a> / <a href="https://www.pdok.nl/" target="_blank" rel="noopener noreferrer">PDOK</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a> (water blended).</p>
+  <div class="style-status" class:changing aria-live="polite"><span aria-hidden="true">{changing ? '↻' : '↳'}</span>{$t(changing ? 'Changing perspective…' : styleMessage || 'Selected data stays with you.')}</div>
+  <div class="control-heading"><span>{$t('MAP DETAILS')}</span><span aria-hidden="true">01</span></div>
+  <div class="preference"><div><strong>{$t('Place names')}</strong><small>{$t('Streets & neighbourhood labels')}</small></div><button class="toggle" class:enabled={labels} role="switch" aria-checked={labels} aria-label={$t('Place names')} on:click={() => {labels = !labels; toggleLabels(map, labels);}}><i></i></button></div>
+  <div class="preference"><div><strong>{$t('Building heights')}</strong><small>{$t('Explore the city in three dimensions')}</small></div><button class="toggle" class:enabled={buildings} role="switch" aria-checked={buildings} aria-label={$t('Building heights')} on:click={() => {buildings = !buildings; toggle3DBuildings(map, buildings);}}><i></i></button></div>
+  <div class="control-heading atmosphere-heading"><span>{$t('LIVE ATMOSPHERE')}</span><span aria-hidden="true">02</span></div>
+  <div class="preference">
+    <div>
+      <strong>{$t('Cloud atmosphere')}</strong>
+      <small>{$t(!aerial ? 'Available on Aerial'
+        : weatherState?.status === 'live' && weatherState?.cloudCoverPct === 0
+          ? 'Current model: clear over Centrum' : 'Model-driven clouds & soft shadows')}</small>
+    </div>
+    <button class="toggle" class:enabled={aerial && weatherState?.enabled} role="switch"
+      aria-checked={aerial && !!weatherState?.enabled} aria-label={$t('Cloud atmosphere')} disabled={!aerial}
+      on:click={() => weatherController?.setEnabled(!weatherState?.enabled)}><i></i></button>
+  </div>
+  <div class="preference"><div><strong>{$t('Rain radar')}</strong><small>{$t('Latest observed rain · loads on request')}</small></div><button class="toggle" class:enabled={weatherState?.radarEnabled} role="switch" aria-checked={!!weatherState?.radarEnabled} aria-label={$t('Rain radar')} on:click={() => weatherController?.setRadarEnabled(!weatherState?.radarEnabled)}><i></i></button></div>
+  {#if weatherState?.radarEnabled && !weatherState?.radarAt}<p class="hint" role="status">{$t('A recent radar frame isn’t available yet. We’ll try again automatically.')}</p>{/if}
+  <div class="map-guidance"><span class="guidance-icon"><ExplorerIcon name="compass" size={25}/></span><div><strong>{$t('A change of angle.')}</strong><p>{$t('Scroll to zoom. Drag to move. Hold Ctrl and drag to tilt and turn the map.')}</p></div></div>
+  <section class="attribution" aria-label={$t('Map credits')}>
+    <h3>{$t('Map credits')}</h3>
+    <p>{$t('Map data')} © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">{$t('OpenStreetMap contributors')}</a> · <a href="https://openfreemap.org/" target="_blank" rel="noopener noreferrer">OpenFreeMap</a></p>
+    <p>{$t('Aerial imagery, 2026')}: <a href="https://www.beeldmateriaal.nl/" target="_blank" rel="noopener noreferrer">Samenwerkingsverband Beeldmateriaal</a> / <a href="https://www.pdok.nl/" target="_blank" rel="noopener noreferrer">PDOK</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a> {$t('(water blended).')}</p>
   </section>
 </div>
 <style>
@@ -123,6 +139,7 @@
   .preference small { font-size:11px; color:#959f8d; margin-top:5px; line-height:1.5; }
   .toggle { position:relative; width:35px; height:21px; border:1px solid #ffffff22; border-radius:5px; background:#323a2c; flex-shrink:0; padding:0; transition:background .25s,border-color .25s; }
   .toggle::before { content:''; position:absolute; inset:-12px -8px; }
+  .toggle:disabled { opacity:.5; cursor:default; }
   .toggle i { position:absolute; left:3px; top:3px; width:13px; height:13px; border-radius:2px; background:#819273; transition:transform .3s cubic-bezier(.2,.7,.2,1),background .25s; }
   .toggle.enabled { background:#b9c5ac; border-color:#b9c5ac; }
   .toggle.enabled i { transform:translateX(14px); background:#273021; }

@@ -5,6 +5,7 @@
   import { API_BASE_URL } from './liveLayers.js';
   import { DATASET_BY_ID, featureTitle, featureSubtitle, featureDetails, featureDescription, featureAction, safeLink, formatNumber, formatDate } from './explorerData.js';
   import ExplorerIcon from './ExplorerIcon.svelte';
+  import { language, t } from './i18n.js';
   export let feature;
   export let layerState = null;
   export let canFocus = true;
@@ -19,17 +20,34 @@
   let previousFeature;
   $: properties = feature?.properties || {};
   $: dataset = DATASET_BY_ID[properties.__dataset];
-  $: rows = featureDetails(feature);
+  $: rows = featureDetails(feature, $language);
   $: action = featureAction(feature);
-  $: highlight = primaryMetric(properties);
-  function primaryMetric(p) {
-    const d = p.details || {};
-    if (p.__dataset === 'parking' && Number.isFinite(d.available_spaces)) return { label: 'Spaces available', value: formatNumber(d.available_spaces), unit: Number.isFinite(d.total_capacity) ? `of ${formatNumber(d.total_capacity)} spaces` : 'spaces', number: true };
-    if (p.__dataset === 'traffic' && Number.isFinite(p.speed_kmh)) return { label: 'Current corridor speed', value: formatNumber(p.speed_kmh), unit: 'km/h', number: true };
-    if (p.__dataset === 'crowd' && Number.isFinite(p.crowd_index)) return { label: 'Estimated district activity', value: formatNumber(p.crowd_index), unit: '/ 100 · model estimate', number: true };
-    if (p.__dataset === 'bridges' && typeof d.active_opening === 'boolean') return { label: 'Opening for vessels', value: d.active_opening ? 'In progress' : 'Not active', unit: 'Latest reported status' };
-    if (p.__dataset === 'events' && p.start_time) return { label: 'Next on the calendar', value: formatDate(p.start_time), unit: p.venue?.name || p.venue_name || 'Rotterdam' };
-    if (p.__dataset === 'environment' && Number.isFinite(d.pm25)) return { label: 'Fine particulate matter', value: formatNumber(d.pm25), unit: 'µg/m³ · PM2.5', number: true };
+  $: description = featureDescription(feature, $language);
+  $: highlight = primaryMetric(properties, $language, $t);
+
+  function primaryMetric(p, language, translate) {
+    const details = p.details || {};
+    const number = value => formatNumber(value, language);
+    if (p.__dataset === 'parking' && Number.isFinite(details.available_spaces)) {
+      const unit = Number.isFinite(details.total_capacity)
+        ? translate('of {count} spaces', { count: number(details.total_capacity) }) : translate('spaces');
+      return { label: translate('Spaces available'), value: number(details.available_spaces), unit, number: true };
+    }
+    if (p.__dataset === 'traffic' && Number.isFinite(p.speed_kmh)) {
+      return { label: translate('Current corridor speed'), value: number(p.speed_kmh), unit: 'km/h', number: true };
+    }
+    if (p.__dataset === 'crowd' && Number.isFinite(p.crowd_index)) {
+      return { label: translate('Estimated district activity'), value: number(p.crowd_index), unit: translate('/ 100 · model estimate'), number: true };
+    }
+    if (p.__dataset === 'bridges' && typeof details.active_opening === 'boolean') {
+      return { label: translate('Opening for vessels'), value: translate(details.active_opening ? 'In progress' : 'Not active'), unit: translate('Latest reported status') };
+    }
+    if (p.__dataset === 'events' && p.start_time) {
+      return { label: translate('Next on the calendar'), value: formatDate(p.start_time, true, language), unit: p.venue?.name || p.venue_name || 'Rotterdam' };
+    }
+    if (p.__dataset === 'environment' && Number.isFinite(details.pm25)) {
+      return { label: translate('Fine particulate matter'), value: number(details.pm25), unit: 'µg/m³ · PM2.5', number: true };
+    }
     return null;
   }
   $: candidateDistrict = properties.district_name || properties.district || (properties.__dataset === 'districts' ? properties.name : null);
@@ -53,20 +71,20 @@
   }
 </script>
 
-<section class="selection-card" class:full-map={!explorerOpen} aria-label="Location details" in:fly={{ x: 18, duration: reducedMotion ? 0 : 420, easing: cubicOut }} out:fly={{ x: 10, duration: reducedMotion ? 0 : 160 }}>
+<section class="selection-card" class:full-map={!explorerOpen} aria-label={$t('Location details')} in:fly={{ x: 18, duration: reducedMotion ? 0 : 420, easing: cubicOut }} out:fly={{ x: 10, duration: reducedMotion ? 0 : 160 }}>
   <div class="card-heading">
     <span class="category-mark"><ExplorerIcon name={dataset?.icon || 'pin'} size={19}/></span>
-    <span class="eyebrow">{dataset?.label || 'A PLACE IN ROTTERDAM'}</span>
-    <button class="close" aria-label="Close location details" on:click={onClose}><ExplorerIcon name="close" size={17}/></button>
+    <span class="eyebrow">{$t(dataset?.label || 'A PLACE IN ROTTERDAM')}</span>
+    <button class="close" aria-label={$t('Close location details')} on:click={onClose}><ExplorerIcon name="close" size={17}/></button>
   </div>
   {#key feature?.id || properties.id || featureTitle(feature)}
     <div class="record-body" in:fly={{ y: 10, duration: reducedMotion ? 0 : 320, easing: cubicOut }}>
       {#if !imageFailed && safeLink(properties.image_url)}<div class="image-frame"><img class="event-image" src={safeLink(properties.image_url)} alt="" loading="lazy" on:error={() => imageFailed = true}/></div>{/if}
       <div class="content">
-        <span class="place-label">SELECTED LOCATION <span aria-hidden="true">↗</span></span>
-        <h2>{featureTitle(feature)}</h2>
-        <p class="subtitle">{featureSubtitle(feature)}</p>
-        {#if layerState?.status === 'stale'}<div class="record-state" role="status">Last available record · this feed could not refresh.</div>{/if}
+        <span class="place-label">{$t('SELECTED LOCATION')} <span aria-hidden="true">↗</span></span>
+        <h2>{featureTitle(feature, $language)}</h2>
+        <p class="subtitle">{featureSubtitle(feature, $language)}</p>
+        {#if layerState?.status === 'stale'}<div class="record-state" role="status">{$t('Last available record · this feed could not refresh.')}</div>{/if}
         {#if highlight}
           <div class="primary-metric" class:numeric={highlight.number}>
             <span class="metric-label">{highlight.label}</span>
@@ -74,21 +92,21 @@
             <svg class="metric-rule" viewBox="0 0 280 8" preserveAspectRatio="none" aria-hidden="true"><path d="M0 7h267l7-6h6"/></svg>
           </div>
         {/if}
-        {#if featureDescription(feature)}<p class="description">{featureDescription(feature)}</p>{/if}
+        {#if description}<p class="description">{description}</p>{/if}
         {#if rows.length}<dl>{#each rows as row, index}<div style={`--row:${Math.min(index, 8)}`}><dt>{row.label}</dt><dd>{row.value}</dd></div>{/each}</dl>{/if}
         {#if profileStatus === 'ready'}
-          <div class="profile" role="region" aria-label="District profile" in:fly={{ y: 8, duration: reducedMotion ? 0 : 260 }}>
-            <span class="eyebrow">{profile.demographics?.data_year || ''} DISTRICT PROFILE</span>
+          <div class="profile" role="region" aria-label={$t('District profile')} in:fly={{ y: 8, duration: reducedMotion ? 0 : 260 }}>
+            <span class="eyebrow">{profile.demographics?.data_year || ''} {$t('DISTRICT PROFILE')}</span>
             <h3>{profile.district_name}</h3>
-            <div class="profile-grid"><div><strong>{formatNumber(profile.demographics?.total_population)}</strong><span>Residents</span></div><div><strong>{formatNumber(profile.housing?.surface_area?.average_m2)}<small> m²</small></strong><span>Average home</span></div></div>
-            <p>{profile.demographics?.source || 'District statistics'} · Annual statistics, not live readings.</p>
+            <div class="profile-grid"><div><strong>{formatNumber(profile.demographics?.total_population, $language)}</strong><span>{$t('Residents')}</span></div><div><strong>{formatNumber(profile.housing?.surface_area?.average_m2, $language)}<small> m²</small></strong><span>{$t('Average home')}</span></div></div>
+            <p>{profile.demographics?.source || $t('District statistics')} · {$t('Annual statistics, not live readings.')}</p>
           </div>
         {/if}
-        {#if profileStatus === 'error'}<p class="record-state" role="status">The district profile is unavailable right now.</p>{/if}
+        {#if profileStatus === 'error'}<p class="record-state" role="status">{$t('The district profile is unavailable right now.')}</p>{/if}
         <div class="actions">
-          {#if action}<a class="primary-action" href={action.href} target="_blank" rel="noopener noreferrer">{action.label}<ExplorerIcon name="arrow" size={16}/></a>{/if}
-          {#if district && profileStatus !== 'ready'}<button disabled={profileStatus === 'loading'} on:click={loadProfile}>{profileStatus === 'loading' ? 'Loading district profile…' : profileStatus === 'error' ? 'Retry district profile' : 'Explore this district'}<ExplorerIcon name="district" size={16}/></button>{/if}
-          {#if canFocus}<button on:click={onFocus}>Show on map<ExplorerIcon name="pin" size={16}/></button>{:else}<p class="record-state">This place is outside the central map area. Its location details are shown here.</p>{/if}
+          {#if action}<a class="primary-action" href={action.href} target="_blank" rel="noopener noreferrer">{$t(action.label)}<ExplorerIcon name="arrow" size={16}/></a>{/if}
+          {#if district && profileStatus !== 'ready'}<button disabled={profileStatus === 'loading'} on:click={loadProfile}>{$t(profileStatus === 'loading' ? 'Loading district profile…' : profileStatus === 'error' ? 'Retry district profile' : 'Explore this district')}<ExplorerIcon name="district" size={16}/></button>{/if}
+          {#if canFocus}<button on:click={onFocus}>{$t('Show on map')}<ExplorerIcon name="pin" size={16}/></button>{:else}<p class="record-state">{$t('This place is outside the central map area. Its location details are shown here.')}</p>{/if}
         </div>
       </div>
     </div>

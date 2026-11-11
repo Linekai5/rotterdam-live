@@ -69,45 +69,18 @@ test('river blend stays inside both the city and surveyed water', () => {
   }
 });
 
-test('elastic island boundary physics and responsive minZoom clamp', async () => {
-  const {
-    ROTTERDAM_ISLAND_SW,
-    ROTTERDAM_ISLAND_NE,
-    MAX_ZOOM_LIMIT,
-    calculateResponsiveMinZoom,
-    isPointInRotterdamIsland,
-    clampToRotterdamIsland,
-    cubicOutEasing
-  } = await import('../src/lib/cameraPhysics.js');
-
-  assert.deepEqual(ROTTERDAM_ISLAND_SW, [3.93, 51.83]);
-  assert.deepEqual(ROTTERDAM_ISLAND_NE, [4.63, 52.01]);
+test('responsive minimum zoom stays within the supported range', async () => {
+  const { MAX_ZOOM_LIMIT, calculateResponsiveMinZoom } = await import('../src/lib/cameraPhysics.js');
   assert.equal(MAX_ZOOM_LIMIT, 19.5);
 
-  // Responsive minZoom stays within [10.6, 11.2] across viewports
-  for (const vp of [
+  for (const viewport of [
     { clientWidth: 390, clientHeight: 844 },
     { clientWidth: 1440, clientHeight: 900 },
     { clientWidth: 2560, clientHeight: 1440 }
   ]) {
-    const z = calculateResponsiveMinZoom(vp);
-    assert.ok(z >= 10.6 && z <= 11.2, `minZoom ${z} out of [10.6, 11.2]`);
+    const zoom = calculateResponsiveMinZoom(viewport);
+    assert.ok(zoom >= 10.6 && zoom <= 11.2, `minZoom ${zoom} out of [10.6, 11.2]`);
   }
-
-  // Rotterdam Centrum [4.479, 51.922] and Maasvlakte [3.985, 51.958] are inside valid polygon
-  assert.equal(isPointInRotterdamIsland(4.479, 51.922), true);
-  assert.equal(isPointInRotterdamIsland(3.985, 51.958), true);
-
-  // Drifting far outside into North Sea [3.75, 52.05] snaps back to nearest valid island frontier
-  const snapped = clampToRotterdamIsland(3.75, 52.05);
-  assert.equal(snapped.outside, true);
-  assert.ok(snapped.distanceDeg > 0.1);
-  assert.equal(isPointInRotterdamIsland(snapped.lng, snapped.lat), true);
-
-  // Cubic-out easing curve properties
-  assert.equal(cubicOutEasing(0), 0);
-  assert.equal(cubicOutEasing(1), 1);
-  assert.ok(cubicOutEasing(0.5) > 0.85);
 });
 
 test('12-node spatial weather interpolation and altitude zoom-fade', async () => {

@@ -49,7 +49,7 @@ verification. No claim of measured forecast accuracy is made by this implementat
 
 The full session explanation, cache/status contract, renderer details, validation
 results and remaining limitations are recorded in the root
-`rotterdam_live_api_architecture.txt` (architecture revision 2.6.1, updated
+`rotterdam_live_api_architecture.txt` (architecture revision 2.7.0, updated
 10 November with custom SVG map symbols, frontend polish and same-origin built
 preview/API routing). The existing cloud renderer remains enabled on Aerial;
 source freshness and model limitations are unchanged. Work is carried
@@ -60,3 +60,7 @@ The annotated UI follow-up moved the Rotterdam date/time into the weather card.
 Its main button now collapses the whole card to a compact view and expands it
 again, independently of cloud rendering. Bottom overlays and zoom/reset controls
 were removed; map credits remain inside Map settings.
+
+The NL/EN control localizes weather conditions using the model's weather codes.
+The atmosphere renders on Aerial, and the dashboard reads the live model in
+all three views. The selected cloud preference applies when returning to Aerial.

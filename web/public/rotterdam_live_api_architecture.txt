@@ -1,6 +1,6 @@
 # Rotterdam Live — City Explorer & Live Weather Architecture
 
-Architecture revision 2.6.1 · 10 November 2026 · Development branch: `malidev`
+Architecture revision 2.7.0 · 11 November 2026 · Development branch: `malidev`
 
 This public overview describes the current development implementation. The session
 changes have not been deployed to production. The full repository specification is
@@ -138,9 +138,19 @@ Rain radar starts off and loads metadata/tiles only after it is enabled in Map.
 Its switch is independent of cloud atmosphere. Map credits and provider/license links are available
 inside Map settings. Bottom credit overlays, coordinates and zoom/reset controls
 have been removed following the annotated UI review.
-The original volumetric clouds remain enabled by default on Aerial and across
-map-style changes. Zero model cloud cover gives a clear sky; the map does not add
-decorative clouds over a clear live-model snapshot.
+The model atmosphere starts enabled on Aerial. Night and Atlas show their
+vector base maps. Returning to Aerial applies the cloud preference again. The
+weather card reads the live model in every view.
+
+## Language and map navigation
+
+The NL/EN switch changes the interface, including weather conditions, dates and
+number formats. The browser saves the chosen language. Provider names, titles
+and descriptions use their source wording.
+
+MapLibre applies the bounds of the loaded Rotterdam tiles during navigation.
+Dragging past the edge keeps the camera inside the coverage area and allows
+panning back toward the city.
 
 ## Session verification and remaining work
 

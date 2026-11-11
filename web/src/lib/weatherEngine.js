@@ -1066,6 +1066,7 @@ export function createWeatherEngineController(map, onStateChange = null) {
       windSpeedKmh: centerNode.wind_speed_10m ?? null,
       windGustsKmh: centerNode.wind_gusts_10m ?? null,
       windDirectionDeg: centerNode.wind_direction_10m ?? null,
+      weatherCode: centerNode.weather_code ?? null,
       weatherDescription: centerNode.weather_description || 'Weather unavailable',
       solar: activeSolar,
       altitudePhase: altitude.phaseLabel,
@@ -1128,7 +1129,8 @@ export function createWeatherEngineController(map, onStateChange = null) {
   const stateApi = {
     getActiveNodes: () => activeNodes,
     getActiveSolar: () => activeSolar,
-    isEnabled: () => enabled && activeNodes.length === 12 && computeSummaryState().status === 'live',
+    isEnabled: () => enabled && (!map || Boolean(map.getSource('satellite')))
+      && activeNodes.length === 12 && computeSummaryState().status === 'live',
     consumeDirtyFlag: () => {
       const wasDirty = dirty;
       dirty = false;
@@ -1167,13 +1169,24 @@ export function createWeatherEngineController(map, onStateChange = null) {
 
   async function attachLayer() {
     if (removed || !map || !map.getStyle()) return;
+    if (!map.getSource('satellite')) {
+      // A pending image load can outlive a style change. Keep vector styles clear.
+      if (map.getLayer(WEATHER_LAYER_ID)) {
+        queueMicrotask(() => {
+          if (!removed && !map.getSource('satellite') && map.getLayer(WEATHER_LAYER_ID)) {
+            map.removeLayer(WEATHER_LAYER_ID);
+          }
+        });
+      }
+      return;
+    }
     if (map.getLayer(WEATHER_LAYER_ID)) {
       ensureTopmostWeatherLayer();
       return;
     }
     try {
       const img = await loadIslandDistanceImage();
-      if (removed || !map.getStyle()) return;
+      if (removed || !map.getSource('satellite')) return;
       if (!map.getLayer(WEATHER_LAYER_ID)) {
         map.addLayer(new VolumetricWeatherLayer(img, stateApi));
       }

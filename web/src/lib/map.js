@@ -6,37 +6,18 @@ import styleDark from './style_dark.json';
 import { installCoastalOcean, removeCoastalOcean, OCEAN_LAYER } from './coastalOcean.js';
 import { installLiveEvents, filterLiveEvents } from './liveLayers.js';
 import { installTrafficMapLayer, setTrafficVisibility } from './trafficClient.js';
-import {
-  ROTTERDAM_ISLAND_ENVELOPE,
-  ROTTERDAM_OUTER_SAFETY_BOUNDS,
-  ROTTERDAM_ISLAND_POLYGON,
-  MAX_ZOOM_LIMIT,
-  calculateResponsiveMinZoom,
-  clampToRotterdamIsland,
-  isPointInRotterdamIsland,
-  cubicOutEasing,
-  installElasticIslandPhysics
-} from './cameraPhysics.js';
+import { MAX_ZOOM_LIMIT, calculateResponsiveMinZoom, installResponsiveMinZoom } from './cameraPhysics.js';
 import { WEATHER_LAYER_ID } from './weatherEngine.js';
 
 export {
   installLiveEvents,
   filterLiveEvents,
   installTrafficMapLayer,
-  setTrafficVisibility,
-  ROTTERDAM_ISLAND_ENVELOPE,
-  ROTTERDAM_OUTER_SAFETY_BOUNDS,
-  ROTTERDAM_ISLAND_POLYGON,
-  MAX_ZOOM_LIMIT,
-  calculateResponsiveMinZoom,
-  clampToRotterdamIsland,
-  isPointInRotterdamIsland,
-  cubicOutEasing,
-  installElasticIslandPhysics
+  setTrafficVisibility
 };
 
 /**
- * Rotterdam coordinate bounding box [SW, NE]
+ * Coverage of the Rotterdam map tiles [SW, NE]
  */
 export const ROTTERDAM_BOUNDS = [
   [4.379, 51.861],
@@ -120,7 +101,7 @@ export async function initMap(mapElement, onReady) {
     zoom: initialZoom ? Math.max(responsiveMinZoom, Math.min(MAX_ZOOM_LIMIT, initialZoom)) : 11.6,
     minZoom: responsiveMinZoom,
     maxZoom: MAX_ZOOM_LIMIT,
-    maxBounds: ROTTERDAM_OUTER_SAFETY_BOUNDS,
+    maxBounds: ROTTERDAM_BOUNDS,
     interactive: true,
     dragPan: true,
     scrollZoom: true,
@@ -164,7 +145,7 @@ export async function initMap(mapElement, onReady) {
   if (typeof window !== 'undefined') window.map = map;
 
   installCoastalOcean(map);
-  installElasticIslandPhysics(map);
+  installResponsiveMinZoom(map);
 
   map.on('load', () => {
     try { map.resize(); } catch (e) {}

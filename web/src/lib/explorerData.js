@@ -1,3 +1,5 @@
+import { languageLocale, translate } from './i18n.js';
+
 // Display definitions follow the backend's actual filters and GeoJSON contracts.
 export const MAP_DATASETS = [
   { id: 'events', label: 'What’s on', group: 'Discover', icon: 'spark', caption: 'Concerts, culture & city events', path: '/events', color: '#c6b8a2', source: 'Event listings', filters: [{ key: 'subcategory', label: 'Event type', options: [['', 'All events'], ['concert', 'Concerts'], ['festival', 'Festivals'], ['theatre', 'Theatre'], ['exhibition', 'Exhibitions'], ['stadium_fixture', 'Football']] }, { key: 'horizon', label: 'When', options: [['', 'Upcoming'], ['24h', 'Next 24 hours'], ['7d', 'Next 7 days']] }] },
@@ -16,12 +18,27 @@ export const MAP_DATASETS = [
 ];
 export const DATASET_BY_ID = Object.fromEntries(MAP_DATASETS.map(item => [item.id, item]));
 export const EMPTY_COLLECTION = { type: 'FeatureCollection', features: [] };
-const numberFormat = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 1 });
-export const formatNumber = value => Number.isFinite(value) ? numberFormat.format(value) : '—';
-export const humanize = value => typeof value === 'string' ? value.replaceAll('_', ' ').replace(/^./, c => c.toUpperCase()) : '';
-export function formatDate(value, withTime = true) {
+const numberFormats = {
+  en: new Intl.NumberFormat('en-GB', { maximumFractionDigits: 1 }),
+  nl: new Intl.NumberFormat('nl-NL', { maximumFractionDigits: 1 })
+};
+export function formatNumber(value, language = 'en') {
+  return Number.isFinite(value) ? numberFormats[language].format(value) : '—';
+}
+export function humanize(value, language = 'en') {
+  if (typeof value !== 'string') return '';
+  const label = value.replaceAll('_', ' ').replace(/^./, char => char.toUpperCase());
+  const key = label.slice(0, 1) + label.slice(1).toLowerCase();
+  const translated = translate(language, key);
+  return translated === key ? label : translated;
+}
+export function formatDate(value, withTime = true, language = 'en') {
   const date = new Date(value);
-  return value && Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'short', ...(withTime ? { hour: '2-digit', minute: '2-digit' } : {}) }).format(date) : null;
+  if (!value || !Number.isFinite(date.getTime())) return null;
+  return new Intl.DateTimeFormat(languageLocale(language), {
+    timeZone: 'Europe/Amsterdam', day: 'numeric', month: 'short',
+    ...(withTime ? { hour: '2-digit', minute: '2-digit' } : {})
+  }).format(date);
 }
 export function safeLink(value) {
   try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) ? url.href : null; } catch { return null; }
@@ -48,78 +65,102 @@ export function isPrimaryEvent(feature) {
   const transportation = classifications.some(item => /^(transportation|parking)$/i.test(item.type?.name || ''));
   return !transportation && !/^(parking (permit|ticket)|parkeerticket|parkeerkaart|locker ticket|vip upgrade)\b/i.test(p.title || '');
 }
-export function featureTitle(feature) {
+export function featureTitle(feature, language = 'en') {
   const p = feature?.properties || {};
-  return p.details?.name || p.title || p.name || p.district_name || p.district || 'Rotterdam location';
+  return p.details?.name || p.title || p.name || p.district_name || p.district || translate(language, 'Rotterdam location');
 }
-export function featureSubtitle(feature) {
+export function featureSubtitle(feature, language = 'en') {
   const p = feature?.properties || {};
-  if (p.__dataset === 'traffic') return `${formatNumber(p.speed_kmh)} km/h · ${humanize(p.congestion_level) || 'Corridor estimate'}`;
-  if (p.__dataset === 'crowd') return `${humanize(p.crowd_status)} · estimated city activity`;
-  if (p.__dataset === 'cameras') return `${p.details?.camera_type === 'anpr' ? 'Speed camera' : humanize(p.details?.camera_type) || 'Mapped camera'} · mapped location`;
-  if (p.__dataset === 'parking' && Number.isFinite(p.details?.available_spaces)) return `${formatNumber(p.details.available_spaces)} spaces available`;
-  return p.subtitle || p.venue?.name || p.venue_name || humanize(p.subcategory || p.shop_type || p.category) || DATASET_BY_ID[p.__dataset]?.source || 'City information';
+  const tr = (message, variables) => translate(language, message, variables);
+  if (p.__dataset === 'traffic') {
+    return `${formatNumber(p.speed_kmh, language)} km/h · ${humanize(p.congestion_level, language) || tr('Corridor estimate')}`;
+  }
+  if (p.__dataset === 'crowd') return `${humanize(p.crowd_status, language)} · ${tr('estimated city activity')}`;
+  if (p.__dataset === 'cameras') {
+    const type = p.details?.camera_type === 'anpr' ? tr('Speed camera') : humanize(p.details?.camera_type, language) || tr('Mapped camera');
+    return `${type} · ${tr('mapped location')}`;
+  }
+  if (p.__dataset === 'parking' && Number.isFinite(p.details?.available_spaces)) {
+    return tr('{count} spaces available', { count: formatNumber(p.details.available_spaces, language) });
+  }
+  return p.subtitle || p.venue?.name || p.venue_name || humanize(p.subcategory || p.shop_type || p.category, language)
+    || tr(DATASET_BY_ID[p.__dataset]?.source || 'City information');
 }
-export function featureDetails(feature) {
+export function featureDetails(feature, language = 'en') {
   const p = feature?.properties || {};
   const d = p.details || {};
   const rows = [];
-  const add = (label, value) => { if (value !== null && value !== undefined && value !== '') rows.push({ label, value: String(value) }); };
+  const tr = (message, variables) => translate(language, message, variables);
+  const number = value => formatNumber(value, language);
+  const date = value => formatDate(value, true, language);
+  const status = value => humanize(value, language);
+  const add = (label, value) => {
+    if (value !== null && value !== undefined && value !== '') rows.push({ label: tr(label), value: String(value) });
+  };
   if (p.__dataset === 'traffic') {
-    if (Number.isFinite(p.speed_kmh)) add('Speed', `${formatNumber(p.speed_kmh)} km/h`);
-    if (Number.isFinite(p.delay_seconds)) add('Extra travel time', p.delay_seconds < 60 ? `${Math.round(p.delay_seconds)} sec` : `${formatNumber(p.delay_seconds / 60)} min`);
-    if (Number.isFinite(p.current_travel_time_seconds)) add('Travel time', `${formatNumber(p.current_travel_time_seconds / 60)} min`);
-    add('Conditions', humanize(p.congestion_level));
+    if (Number.isFinite(p.speed_kmh)) add('Speed', `${number(p.speed_kmh)} km/h`);
+    if (Number.isFinite(p.delay_seconds)) add('Extra travel time', p.delay_seconds < 60 ? `${Math.round(p.delay_seconds)} sec` : `${number(p.delay_seconds / 60)} min`);
+    if (Number.isFinite(p.current_travel_time_seconds)) add('Travel time', `${number(p.current_travel_time_seconds / 60)} min`);
+    add('Conditions', status(p.congestion_level));
   }
   if (p.__dataset === 'crowd') {
-    if (Number.isFinite(p.crowd_index)) add('Activity estimate', `${formatNumber(p.crowd_index)} / 100`);
-    add('Activity', humanize(p.crowd_status));
-    if (Number.isFinite(p.active_events_count)) add('Active events', formatNumber(p.active_events_count));
-    if (Number.isFinite(p.parking_occupancy_avg_pct)) add('Monitored parking', `${formatNumber(p.parking_occupancy_avg_pct)}% occupied`);
+    if (Number.isFinite(p.crowd_index)) add('Activity estimate', `${number(p.crowd_index)} / 100`);
+    add('Activity', status(p.crowd_status));
+    if (Number.isFinite(p.active_events_count)) add('Active events', number(p.active_events_count));
+    if (Number.isFinite(p.parking_occupancy_avg_pct)) add('Monitored parking', tr('{count}% occupied', { count: number(p.parking_occupancy_avg_pct) }));
   }
   if (p.__dataset === 'events') {
-    add('Starts', formatDate(p.start_time)); add('Ends', formatDate(p.end_time));
+    add('Starts', date(p.start_time));
+    add('Ends', date(p.end_time));
     add('Venue', p.venue?.name || p.venue_name);
-    if (p.price?.min != null) add('From', `${p.price.currency || 'EUR'} ${formatNumber(p.price.min)}`);
-    add('Ticket status', humanize(p.status));
+    if (p.price?.min != null) add('From', `${p.price.currency || 'EUR'} ${number(p.price.min)}`);
+    add('Ticket status', status(p.status));
   }
   if (p.__dataset === 'parking') {
-    add('Status', humanize(d.status));
-    if (Number.isFinite(d.available_spaces)) add('Available', `${formatNumber(d.available_spaces)} spaces`);
-    if (Number.isFinite(d.total_capacity)) add('Capacity', `${formatNumber(d.total_capacity)} spaces`);
-    if (Number.isFinite(d.occupancy_rate)) add('Occupied', `${formatNumber(d.occupancy_rate)}%`);
-    if (Number.isFinite(d.charging_points)) add('EV charging points', formatNumber(d.charging_points));
+    add('Status', status(d.status));
+    if (Number.isFinite(d.available_spaces)) add('Available', tr('{count} spaces', { count: number(d.available_spaces) }));
+    if (Number.isFinite(d.total_capacity)) add('Capacity', tr('{count} spaces', { count: number(d.total_capacity) }));
+    if (Number.isFinite(d.occupancy_rate)) add('Occupied', `${number(d.occupancy_rate)}%`);
+    if (Number.isFinite(d.charging_points)) add('EV charging points', number(d.charging_points));
   }
   if (p.__dataset === 'bridges') {
-    add('Road traffic', humanize(d.traffic_status));
-    if (typeof d.active_opening === 'boolean') add('Opening for vessels', d.active_opening ? 'Yes' : 'No');
-    add('Opening began', formatDate(d.schedule?.start));
+    add('Road traffic', status(d.traffic_status));
+    if (typeof d.active_opening === 'boolean') add('Opening for vessels', tr(d.active_opening ? 'Yes' : 'No'));
+    add('Opening began', date(d.schedule?.start));
   }
   if (p.__dataset === 'cameras') {
-    add('Camera type', d.camera_type === 'anpr' ? 'Speed camera' : humanize(d.camera_type));
+    add('Camera type', d.camera_type === 'anpr' ? tr('Speed camera') : status(d.camera_type));
     add('Operator', d.operator);
-    if (typeof d.has_live_feed === 'boolean') add('Public feed', d.has_live_feed ? 'Listed by source' : 'No public feed listed');
+    if (typeof d.has_live_feed === 'boolean') add('Public feed', tr(d.has_live_feed ? 'Listed by source' : 'No public feed listed'));
   }
   const address = [p.venue?.address || [p.street_name || d.street, p.house_number].filter(Boolean).join(' '), p.postal_code || p.venue?.postal_code].filter(Boolean).join(', ');
   add('Address', address); add('District', p.district || p.district_name);
   if (p.opening_hours || d.opening_hours) add('Opening hours', p.opening_hours || d.opening_hours);
   const accessible = d.wheelchair_accessible ?? p.wheelchair;
-  if (accessible != null) add('Wheelchair access', accessible === false || accessible === 'no' ? 'Not listed as accessible' : accessible === true || accessible === 'yes' ? 'Listed as accessible' : humanize(String(accessible)));
-  if (d.free_water === true) add('Drinking water', 'Free public water tap');
-  if (Number.isFinite(d.temperature)) add('Temperature', `${formatNumber(d.temperature)}°C`);
-  if (Number.isFinite(d.humidity)) add('Humidity', `${formatNumber(d.humidity)}%`);
-  for (const [key, label] of [['pm25', 'PM2.5'], ['pm10', 'PM10'], ['no2', 'NO₂']]) {
-    if (Number.isFinite(d[key])) add(label, `${formatNumber(d[key])} µg/m³`);
+  if (accessible != null) {
+    const access = accessible === false || accessible === 'no' ? tr('Not listed as accessible')
+      : accessible === true || accessible === 'yes' ? tr('Listed as accessible') : status(String(accessible));
+    add('Wheelchair access', access);
   }
-  if (p.__dataset === 'roadworks') { add('Starts', formatDate(d.start_date)); add('Ends', formatDate(d.end_date)); }
-  if (Number.isFinite(d.aqi)) add('Air quality index', formatNumber(d.aqi));
-  add('Source', p.source ? humanize(p.source) : d.source || DATASET_BY_ID[p.__dataset]?.source);
-  add(['retail', 'amenities', 'districts'].includes(p.__dataset) ? 'Record updated' : 'Reported', formatDate(p.timestamp || p.updated_at));
+  if (d.free_water === true) add('Drinking water', tr('Free public water tap'));
+  if (Number.isFinite(d.temperature)) add('Temperature', `${number(d.temperature)}°C`);
+  if (Number.isFinite(d.humidity)) add('Humidity', `${number(d.humidity)}%`);
+  for (const [key, label] of [['pm25', 'PM2.5'], ['pm10', 'PM10'], ['no2', 'NO₂']]) {
+    if (Number.isFinite(d[key])) add(label, `${number(d[key])} µg/m³`);
+  }
+  if (p.__dataset === 'roadworks') {
+    add('Starts', date(d.start_date));
+    add('Ends', date(d.end_date));
+  }
+  if (Number.isFinite(d.aqi)) add('Air quality index', number(d.aqi));
+  const source = p.source ? humanize(p.source) : d.source || DATASET_BY_ID[p.__dataset]?.source;
+  add('Source', source ? tr(source) : null);
+  add(['retail', 'amenities', 'districts'].includes(p.__dataset) ? 'Record updated' : 'Reported', date(p.timestamp || p.updated_at));
   return rows;
 }
-export function featureDescription(feature) {
+export function featureDescription(feature, language = 'en') {
   const p = feature?.properties || {};
-  if (p.__dataset === 'crowd') return 'An estimated activity index combining available signals and a district model. It is not a live count of people.';
+  if (p.__dataset === 'crowd') return translate(language, 'An estimated activity index combining available signals and a district model. It is not a live count of people.');
   return plainText(p.description || p.details?.summary || p.details?.description || p.details?.work_description || '');
 }
 export function featureAction(feature) {
