@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+"""Trusted host entrypoint: deploy main's frontend without checking out private files."""
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+import time
+import urllib.request
+
+
+def run(*args, **kwargs):
+    print('+', *map(str, args), flush=True)
+    return subprocess.run(list(map(str, args)), check=True, **kwargs)
+
+
+def output(*args):
+    return subprocess.check_output(list(map(str, args)), text=True).strip()
+
+
+def main():
+    source = Path(os.environ['DEPLOY_SOURCE'])
+    state = Path(os.environ['DEPLOY_STATE'])
+    compose = Path(os.environ['DEPLOY_COMPOSE'])
+    url = os.environ['DEPLOY_URL'].rstrip('/')
+    state.mkdir(parents=True, exist_ok=True)
+    lock = (state / 'lock').open('w')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return
+    run('git', '-C', source, 'fetch', 'origin', 'main')
+    sha = output('git', '-C', source, 'rev-parse', 'FETCH_HEAD')
+    if not re.fullmatch('[0-9a-f]{40}', sha):
+        raise RuntimeError('Invalid release revision')
+    deployed = state / 'deployed.json'
+    if deployed.exists() and json.loads(deployed.read_text())['sha'] == sha:
+        print('Already deployed', sha, flush=True)
+        return
+    image = f'rotterdam_live_web:{sha}'
+    previous = output('docker', 'inspect', 'rotterdam_live_web', '--format', '{{.Image}}')
+    # Retain an explicit tag even when the old running image has lost its name.
+    run('docker', 'tag', previous, 'rotterdam_live_web:rollback')
+    with tempfile.TemporaryDirectory(prefix='release-', dir=state) as directory:
+        release = Path(directory)
+        archive = release / 'source.tar'
+        with archive.open('wb') as stream:
+            run('git', '-C', source, 'archive', sha, 'web', stdout=stream)
+        run('tar', '-xf', archive, '-C', release)
+        (release / 'web/public/version.json').write_text(json.dumps({'sha': sha}) + '\n')
+        # Build and test before touching the running container.
+        run('docker', 'build', '--target', 'builder', '-t', f'{image}-builder', release / 'web')
+        run('docker', 'run', '--rm', f'{image}-builder', 'npm', 'test')
+        run('docker', 'build', '-t', image, release / 'web')
+        override = release / 'override.json'
+
+        def activate(tag):
+            override.write_text(json.dumps({'services': {'web': {'image': tag}}}))
+            run('docker', 'compose', '-p', 'rotterdam-live', '--project-directory', compose.parent,
+                '-f', compose, '-f', override, 'up', '-d', '--no-deps', '--no-build',
+                '--wait', '--wait-timeout', '90', 'web')
+            run('docker', 'exec', 'rotterdam_live_nginx', 'nginx', '-t')
+            run('docker', 'exec', 'rotterdam_live_nginx', 'nginx', '-s', 'reload')
+
+        try:
+            activate(image)
+            for attempt in range(15):
+                try:
+                    with urllib.request.urlopen(url + '/version.json?release=' + sha, timeout=15) as response:
+                        actual = json.load(response)['sha']
+                    if actual != sha:
+                        raise RuntimeError(f'Expected {sha}, served {actual}')
+                    with urllib.request.urlopen(url + '/health/live', timeout=15) as response:
+                        if json.load(response)['status'] != 'alive':
+                            raise RuntimeError('API liveness check failed')
+                    break
+                except Exception:
+                    if attempt == 14:
+                        raise
+                    time.sleep(2)
+        except BaseException:
+            print('Deployment failed; restoring previous frontend', flush=True)
+            activate('rotterdam_live_web:rollback')
+            raise
+        pending = state / 'deployed.tmp'
+        pending.write_text(json.dumps({'sha': sha, 'image': image, 'previous_image': previous}) + '\n')
+        pending.replace(deployed)
+        print('Deployed and verified', sha, flush=True)
+    # Build caches remain available; remove unneeded intermediate image tags.
+    run('docker', 'image', 'rm', f'{image}-builder')
+
+
+if __name__ == '__main__':
+    main()

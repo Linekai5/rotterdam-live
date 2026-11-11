@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Rotterdam Live main for updates every minute
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=60s
+AccuracySec=5s
+Unit=rotterdam-deploy.service
+
+[Install]
+WantedBy=timers.target

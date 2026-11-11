@@ -44,6 +44,14 @@ server {
         proxy_set_header Host $host;
     }
 
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+    }
+
+    location = /version.json {
+        add_header Cache-Control "no-store";
+    }
+
     location / {
         try_files $uri $uri/ /index.html;
     }

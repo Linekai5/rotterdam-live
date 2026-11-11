@@ -28,8 +28,10 @@ remove affected pull-request references and cached views. A history rewrite by i
 copies of data already obtained. See
 [GitHub's removal procedure](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository).
 
-Actions remain disabled for publication and the
-repository's self-hosted runner has been detached. Old workflow logs and caches
+Actions were disabled for publication and the repository's self-hosted runner
+was detached. Actions are now enabled for hosted validation. Production
+deployment is handled by a private host timer, as described in
+[deployment operations](deployment.md). Old workflow logs and caches
 were backed up privately and removed, the unused production Actions secret
 was removed, and workflow token permissions default to read-only. Keep deployments in trusted
 private automation. A public repository exposes all of its branches, including

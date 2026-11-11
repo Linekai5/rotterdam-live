@@ -61,8 +61,9 @@ runners to check the public tree, test/build the frontend and validate Nginx.
 
 Both branch histories have been sanitized. Old pull-request references and
 cached commit views still require GitHub Support cleanup. Publication was
-requested with that cleanup outstanding. Actions are disabled and no self-hosted
-runners are attached. Read [the publication notes](docs/publication.md) before
+requested with that cleanup outstanding. Actions are enabled for validation; no self-hosted runners are attached.
+Production checks main every minute through a private host service; see
+[deployment operations](docs/deployment.md). Read [the publication notes](docs/publication.md) before
 updating an existing deployment checkout. Public visibility
 exposes every branch, including `malidev`.
 
