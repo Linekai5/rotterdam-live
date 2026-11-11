@@ -8,19 +8,19 @@ Production bind addresses and database passwords are supplied privately.
 
 ## History cleanup and publication
 
-The repository's existing commits still contain backend source, server addresses
-and previously committed database credential defaults. A normal merge, squash
-merge or `.gitignore` update does not erase history from the existing repository.
-Do not make the current repository public on the strength of this cleanup alone.
+Both branch histories have been rewritten to remove backend source,
+deployment addresses and credential literals. Audits of reachable historical
+file contents and Gitleaks checks passed. GitHub still retains old commits in
+pull-request references and cached views; those require its Support cleanup.
+The repository remains private until that separate server-side step is verified.
 
-The existing repository is being retained. A private bundle of the original
-history and an isolated sanitized mirror are prepared outside the working
-checkout. The rewrite removes backend paths from before and after the monorepo
+The existing repository is being retained. Verified private bundles of the original
+history and the sanitized audit records are stored outside the working checkout. The rewrite removes backend paths from before and after the monorepo
 migration and redacts deployment addresses and credential literals throughout
 historical files and messages. Changes to commit IDs require other clones to be
 recloned or carefully rebased; merging old history back would undo the cleanup.
 
-Four closed pull requests retain old references that cannot be replaced by a
+Closed pull requests retain old references that cannot be replaced by a
 normal Git push. After the branch rewrite, GitHub Support must remove affected
 pull-request references and cached views before this existing repository is
 made public again. A history rewrite by itself cannot erase other people's
@@ -28,7 +28,9 @@ copies of data already obtained. See
 [GitHub's removal procedure](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository).
 
 The repository is private during cleanup. Actions are disabled and the
-repository's self-hosted runner has been detached. Keep deployments in trusted
+repository's self-hosted runner has been detached. Old workflow logs and caches
+were backed up privately and removed, the unused production Actions secret
+was removed, and workflow token permissions default to read-only. Keep deployments in trusted
 private automation. A public repository exposes all of its branches, including
 `malidev`; branch protection does not make a branch private.
 

@@ -1,9 +1,9 @@
 # Rotterdam Live Platform — Master Architectural Specification & Operational Status
 
 > [!NOTE]
-> **Architecture Revision:** 2.8.0 — 11 November 2026 (Public source boundary and documentation cleanup. Application package versions are unchanged.)
+> **Architecture Revision:** 2.8.1 — 11 November 2026 (History cleanup and repository safeguards. Application package versions are unchanged.)
 > **Environment:** Hetzner Cloud Linux VPS (`${PUBLIC_BIND_ADDRESS}` / Tailscale `${PRIVATE_BIND_ADDRESS}`)
-> **Source Boundary:** `api/` and production automation are private and ignored. Existing history requires separate clearance before publication; see `docs/publication.md`.
+> **Source Boundary:** `api/` and production automation are private and ignored. Branch history has been sanitized; retained GitHub PR refs and cached views require Support clearance before publication; see `docs/publication.md`.
 > **Repository:** [`github.com/Linekai5/rotterdam-live`](https://github.com/Linekai5/rotterdam-live) (`malidev` development branch; `main` is the deployment branch)
 > **Interactive Documentation:** `https://rotterdamlive.nl/docs` | `https://rotterdamlive.nl/redoc`
 > **Verification Scope:** Frontend and API changes were implemented and checked locally on ports 5173/8000. They have not been deployed to production in this session. Historical infrastructure figures elsewhere in this document are a platform baseline, not a fresh production audit. See sections 10–14 for validation and limitations.
@@ -20,7 +20,7 @@ The platform combines a **PostGIS 16 spatial data store** holding over **396,400
 1. **Cached GeoJSON Performance Target:** Prefer Redis snapshots and indexed PostGIS queries. The historical sub-5ms cache / sub-30ms database figures are targets and prior measurements, not a guarantee for every endpoint or environment.
 2. **Background Ingestion First:** Precompute spatial datasets asynchronously. Current weather routes still perform on-demand harvesting on cache misses, including external HTTP calls and station database work; those paths do not meet the cache-hit latency target. Eliminating this exception requires separate work.
 3. **Dual Network Topologies:** Public web traffic (`rotterdamlive.nl`) is served with genuine Let's Encrypt TLS; the private administrative API gateway (`api.rotterdamlive.nl`) is routed strictly across Tailscale WireGuard over plain HTTP with HSTS headers cleared (`max-age=0`), preventing browser HSTS lockouts while preserving WireGuard end-to-end encryption.
-4. **Public Source Boundary:** Backend source and deployment automation are supplied privately. The current tracked tree excludes `api/`; historical commits still contain it and must not be published without separate history cleanup or a new public initial commit.
+4. **Public Source Boundary:** Backend source and deployment automation are supplied privately. The current tracked tree excludes `api/`; both branch histories have been sanitized. GitHub-retained PR refs and cached views still require Support clearance before publication.
 
 ---
 
@@ -416,7 +416,7 @@ Automated GitHub Actions workflow triggered on pull requests and pushes to `main
 4. **Private Backend:** Public CI does not build or test the ignored backend. Its checks belong to the private source and automation.
 
 ### Production Automation
-The former `.github/workflows/deploy.yml` and machine-specific agent hooks are removed from the tracked tree and ignored, with this machine's local copies retained. Public CI does not deploy. Provision trusted production automation privately, detach self-hosted runners before public release and back up private backend files outside existing deployment checkouts before pulling their removal commit. See `docs/publication.md`. No production deployment or history rewrite was performed by this cleanup.
+The former `.github/workflows/deploy.yml` and machine-specific agent hooks are removed from the tracked tree and ignored, with this machine's local copies retained. Public CI does not deploy. Provision trusted production automation privately, detach self-hosted runners before public release and back up private backend files outside existing deployment checkouts before pulling their removal commit. See `docs/publication.md`. Both branch histories were sanitized and pushed. The repository is private, Actions are disabled, no self-hosted runners are attached, workflow logs/caches were backed up privately and removed, and the unused production Actions secret was removed. GitHub-retained PR refs and cached views require Support cleanup. No production deployment was performed by these safeguard changes.
 
 ---
 
