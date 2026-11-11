@@ -91,3 +91,8 @@ class DeploymentTests(unittest.TestCase):
             self.execute()
         self.assertEqual(len(attempts), 2)
         self.assertFalse((self.root / 'state/deployed.json').exists())
+
+    def test_missing_old_image_is_snapshotted_before_release(self):
+        self.failure = lambda args: args[:2] == ('docker', 'tag')
+        self.execute()
+        self.assertIn(('docker', 'commit', 'rotterdam_live_web', 'rotterdam_live_web:rollback'), self.calls)

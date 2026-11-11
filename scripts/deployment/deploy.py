@@ -42,7 +42,12 @@ def main():
     image = f'rotterdam_live_web:{sha}'
     previous = output('docker', 'inspect', 'rotterdam_live_web', '--format', '{{.Image}}')
     # Retain an explicit tag even when the old running image has lost its name.
-    run('docker', 'tag', previous, 'rotterdam_live_web:rollback')
+    try:
+        run('docker', 'tag', previous, 'rotterdam_live_web:rollback')
+    except subprocess.CalledProcessError:
+        # Older maintenance may have deleted the running image's metadata.
+        # Snapshot its filesystem so the first release can still roll back.
+        run('docker', 'commit', 'rotterdam_live_web', 'rotterdam_live_web:rollback')
     with tempfile.TemporaryDirectory(prefix='release-', dir=state) as directory:
         release = Path(directory)
         archive = release / 'source.tar'
