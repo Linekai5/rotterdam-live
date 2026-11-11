@@ -1,9 +1,28 @@
-# Environment & Secrets
+# Private backend and machine-specific automation (retain local copies)
+/api/
+/.agents/
+/.gemini/
+/.github/workflows/deploy.yml
+
+# Environment & secrets; examples contain placeholders only
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+!.env.template
+.envrc
+.npmrc
+.netrc
 *.pem
 *.key
+*.p12
+*.pfx
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+/secrets/
+/certs/
+/certbot/
 
 # Python
 __pycache__/
@@ -12,7 +31,12 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
-.coverage
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage*
+htmlcov/
 *.egg-info/
 
 # Node & Frontend
@@ -21,14 +45,32 @@ dist/
 test-results/
 playwright-report/
 .npm/
+coverage/
+.cache/
 
 # Database & Data Volumes
-data/
-pgdata/
-redisdata/
+/data/
+/pgdata/
+/redisdata/
+/backups/
+*.sql
+*.sql.gz
+*.dump
+*.bak
+*.backup
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+dump.rdb
+appendonly.aof
 
 # OS & Editors
 .DS_Store
+# Google Drive's generated upload cache
+/.tmp.driveupload/
 Thumbs.db
 .vscode/
 .idea/

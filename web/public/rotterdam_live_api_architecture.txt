@@ -1,341 +1,172 @@
-# Rotterdam Live API — Master Architectural Specification & Implementation Status
-
-> [!NOTE]
-> **Platform Version:** 2.0.0-rc (Real-Time Traffic Engine & Mobility Subsystem: Rotterdam Ring Motorways, Urban Arterials, PostGIS LineStrings, Congestion Tiers, Delay Matrix & ETag 304 Caching)  
-> **Environment:** Hetzner Cloud Linux VPS (Rotterdam Dockerized Stack)  
-> **Backend Repository:** [`github.com/Linekai5/rotterdam-live-api`](https://github.com/Linekai5/rotterdam-live-api) (Private, main branch synced)  
-> **Frontend Repository:** [`github.com/Linekai5/Rott-live`](https://github.com/Linekai5/Rott-live) (Private, main branch synced)  
-> **Architectural Invariant:** Sub-30ms GeoJSON API response times (sub-5ms cached in Redis), zero synchronous external API queries or spatial/mathematical computations during client HTTP requests, automated PostGIS municipal district validation, strict RFC 7946 GeoJSON compliance with LineString corridors.
-
----
-
-## 1. Executive Summary & Core Architecture
-
-The **Rotterdam Live API** (`rotterdam-live-api`) is an asynchronous, high-throughput geospatial platform engineered to power the real-time situational map of Rotterdam (`rott-live`). It serves as the single source of truth for all situational, municipal, commercial, environmental, meteorological, cultural event, crowdness, and traffic intelligence across the municipality of Rotterdam (Gemeentecode `0599`).
-
-The database currently holds **over 396,400 spatial records** indexed with PostGIS GiST and PostgreSQL `pg_trgm` GIN indexes.
-
-```mermaid
-flowchart TD
-    subgraph "External Feeds & Ingestion Sources (100% Asynchronous Ingestion)"
-        NDW_FEED["NDW & RWS Open Traffic Feeds (Speeds, Travel Times, Delays)"]
-        TM_FEED["Ticketmaster Discovery API v2 (Ahoy, De Doelen, Luxor, etc.)"]
-        STAD_FEED["Stadium Fixtures iCal (De Kuip, Het Kasteel, Woudestein)"]
-        FEST_FEED["Rotterdam Municipal Festivals & Open Cultural Agendas"]
-        P2000_FEED["P2000 Capcode 112 Feed (Veiligheidsregio)"]
-        RWS_FEED["Rijkswaterstaat Waterinfo, Bridges & Traffic"]
-        MUN_FEED["Gemeente Rotterdam ArcGIS (SB_Infra, Toilets, Taps, EV)"]
-        STEDIN_FEED["Stedin Regional Grid (Power Outages)"]
-        BAG_FEED["Kadaster / PDOK BAG WFS 2.0 (382,814 Doorways)"]
-        OSM_FEED["Zuid-Holland Geofabrik OSM PBF (C++ Osmium Engine)"]
-        WEATHER_FEED["Buienradar Raintext & 2.0 KNMI Station Feeds"]
-        RADAR_FEED["RainViewer Open Weather Radar API"]
-        PDOK_FEED["PDOK WFS (19 Official CBS Municipal Districts)"]
-        DCMR_FEED["Luchtmeetnet / DCMR Air Quality Sensors"]
-        DONKEY_FEED["Donkey Republic GBFS Bike Sharing"]
-        OPENOV_FEED["OpenOV GTFS-RT Transit Alerts"]
-        NEWS_FEED["Rijnmond RSS & Municipal Press Alerts"]
-        CBS_FEED["CBS StatLine OData v3/v4 (86358NED, 86165NED, 85984NED)"]
-    end
-
-    subgraph "Ingestion Worker (worker.py / APScheduler)"
-        SCHED["APScheduler Orchestrator (AsyncIOScheduler)"]
-        TRAFFIC_HARV["RotterdamTrafficHarvester (60s Cycle: Ring & Arterial Corridors, NDW Feeds & Diurnal Models)"]
-        CROWD_HARV["RotterdamCrowdHarvester (10m Cycle: Baselines, Gaussian Surges, Residual Projections)"]
-        EVENTS_HARV["RotterdamEventsHarvester (Ticketmaster + Stadiums + Festivals)"]
-        BAG_HARV["RotterdamBAGHarvester (Multi-Prefix WFS)"]
-        RETAIL_HARV["RotterdamRetailHarvester (Osmium + PostGIS Linker)"]
-        WEATHER_HARV["RotterdamWeatherHarvester (Nowcast + KNMI + Radar)"]
-        CAM_HARV["RotterdamCameraHarvester (Osmium + ArcGIS)"]
-        AMEN_INGEST["MunicipalAmenitiesIngestor (Toilets, Taps, EV, AED)"]
-        MOB_INGEST["MobilityIngestor (Garages, Bridges, GBFS, GTFS)"]
-        ROAD_INGEST["RoadworksIngestor (Municipal Road Closures)"]
-        UTIL_INGEST["UtilitiesIngestor (Waterways & Stedin Outages)"]
-        P2000_INGEST["P2000Ingestor (Discipline Classification & Geocoding)"]
-        NEWS_INGEST["NewsIngestor (Rijnmond & City Press)"]
-        SPATIAL_INGEST["SpatialBaselineIngestor (19 CBS District Polygons)"]
-        LIVING_HARV["RotterdamLivingHarvester (Demographics, Housing, Wijkprofiel)"]
-    end
-
-    subgraph "Database & Cache Layer"
-        PG[("PostgreSQL 16 + PostGIS 3.4\n- city_traffic_segments: 18 LineString Corridors\n- rotterdam_addresses: 382,814 rows\n- city_amenities: 10,136 rows\n- rotterdam_retail: 2,950 rows\n- rotterdam_events: 384 verified events\n- crowd_telemetry_history: 15m Snapshots\n- district_demographics: 19 rows\n- district_housing_metrics: 19 rows\n- live_events: ~780 real-time rows\n- rotterdam_districts: 19 polygons\n(Spatial GiST, Composite & pg_trgm GIN Indexes)")]
-        REDIS[("Redis 7 In-Memory Cache\nTTL: 15s - 86400s\nSub-5ms Cache Responses")]
-    end
-
-    subgraph "API Service (FastAPI / Uvicorn)"
-        API["FastAPI Routing Engine (/api/v1)\nSub-30ms RFC 7946 GeoJSON\nTraffic & Arterials Mobility Engine\nCrowdness Engine & Real-Time Forecaster\nEvents Domain Engine\nDistrict Passport Engine\nUnified Global Search Engine"]
-    end
-
-    subgraph "Frontend Client"
-        WEB["MapLibre GL + Svelte (Rott-live)\nVector Tile Base + Traffic Flow Lines + Crowdness Choropleth + Events & Passports"]
-    end
-
-    NDW_FEED & TM_FEED & STAD_FEED & FEST_FEED & P2000_FEED & RWS_FEED & MUN_FEED & STEDIN_FEED & BAG_FEED & OSM_FEED & WEATHER_FEED & RADAR_FEED & PDOK_FEED & DCMR_FEED & DONKEY_FEED & OPENOV_FEED & NEWS_FEED & CBS_FEED --> SCHED
-    SCHED --> TRAFFIC_HARV & CROWD_HARV & EVENTS_HARV & BAG_HARV & RETAIL_HARV & WEATHER_HARV & CAM_HARV & AMEN_INGEST & MOB_INGEST & ROAD_INGEST & UTIL_INGEST & P2000_INGEST & NEWS_INGEST & SPATIAL_INGEST & LIVING_HARV
-    TRAFFIC_HARV & CROWD_HARV & EVENTS_HARV & BAG_HARV & RETAIL_HARV & WEATHER_HARV & CAM_HARV & AMEN_INGEST & MOB_INGEST & ROAD_INGEST & UTIL_INGEST & P2000_INGEST & NEWS_INGEST & SPATIAL_INGEST & LIVING_HARV --> PG
-    TRAFFIC_HARV & CROWD_HARV --> REDIS
-    PG --> API
-    REDIS <--> API
-    API --> WEB
-```
-
----
-
-## 2. Infrastructure & Container Topology
-
-The production platform runs on an internal Docker bridge network (`rotterdam_net`):
-
-| Container Name | Service | Internal Port | Host Port | Role & Resource Allocation |
-| :--- | :--- | :--- | :--- | :--- |
-| `rotterdam_live_api` | FastAPI / Uvicorn | `8000` | `${BIND_ADDRESS}:8000` | REST API serving cached GeoJSON, live traffic flows, telemetry, crowdness, events, and search. |
-| `rotterdam_live_worker` | Python Ingestion Worker | — | — | APScheduler background daemon running all 16 ingestion pipelines (including 60s traffic and 10m crowd cycles). |
-| `rotterdam_live_db` | PostgreSQL 16 + PostGIS 3.4 | `5432` | `localhost:5432` | PostGIS spatial database on persistent volume `pgdata`. |
-| `rotterdam_live_redis` | Redis 7 Alpine | `6379` | `localhost:6379` | In-memory key-value cache and spatial snapshot quantizer on volume `redisdata`. |
-
----
-
-## 3. The Real-Time Traffic Engine & Mobility Subsystem (Platform v2.0.0-rc)
-
-### Architectural Invariant: Zero In-Request Computation
-The API endpoints return in **< 5ms** from Redis cache (**< 30ms** on cache-miss from indexed tables). 
-**Never compute spatial joins, LineString clipping, or travel time regressions during client HTTP requests.**
-- The background harvester (`RotterdamTrafficHarvester`) polls external NDW feeds and diurnal baseline engines every 60 seconds.
-- Pre-compiles master LineString FeatureCollections and overview statistics directly into Redis (`mobility:traffic:live`, `mobility:traffic:overview`, `mobility:traffic:segment:{id}`).
-- The API router (`app/api/v1/mobility.py`) strictly reads pre-compiled JSON snapshots with RFC 7232 ETag conditional caching.
-
-### Quantitative Traffic Model & Congestion Tiers
-
-Target metrics:
-- Vehicle Speed: $v \in [0, 130]\text{ km/h}$
-- Speed Ratio: $r = \frac{v}{v_{\text{free}}}$
-- Traversal Duration: $t_{\text{travel}} = \frac{t_{\text{free}}}{\max(0.15, r)}$
-- Traversal Delay: $\text{delay} = \max(0, t_{\text{travel}} - t_{\text{free}})$
-
-**Congestion Severity Tiers:**
-- `free_flow` ($r \ge 0.85$): Fluid conditions, delay $\approx 0$. Color: `#10b981` (Green).
-- `moderate` ($0.60 \le r < 0.85$): Traffic slowing, minor queues. Color: `#f59e0b` (Amber).
-- `heavy` ($0.30 \le r < 0.60$): Major delay, stop-and-go congestion. Color: `#f97316` (Orange).
-- `standstill` ($r < 0.30$): Gridlock / incident blockages. Color: `#ef4444` (Red).
-
-### Monitored Corridors (18 Directional Segments)
-
-1. **The Rotterdam Ring (Motorways / Rijkswegen):**
-   - **A20:** Kleinpolderplein ↔ Terbregseplein (`corridor-a20-eastbound`, `corridor-a20-westbound`)
-   - **A16:** Terbregseplein ↔ Van Brienenoordbrug ↔ Ridderkerk (`corridor-a16-southbound`, `corridor-a16-northbound`)
-   - **A15:** Botlektunnel ↔ Vaanplein ↔ Ridderkerk (`corridor-a15-eastbound`, `corridor-a15-westbound`)
-   - **A4:** Kethelplein ↔ Beneluxtunnel (`corridor-a4-southbound`, `corridor-a4-northbound`)
-   - **A13:** Rotterdam Airport ↔ Kleinpolderplein (`corridor-a13-southbound`, `corridor-a13-northbound`)
-2. **Core Urban Arterials & City Gateways:**
-   - **S100 / Centrumring:** Maasboulevard, Boompjes, Schiedamsedijk, Weena (`corridor-s100-centrumring-clockwise`, `corridor-s100-centrumring-counter`)
-   - **S103:** Stadhoudersweg / Schieweg (`corridor-s103-schieweg-inbound`, `corridor-s103-schieweg-outbound`)
-   - **S102:** Vaanweg / Zuiderparkweg (`corridor-s102-vaanweg-inbound`, `corridor-s102-vaanweg-outbound`)
-   - **Maastunnel Corridor:** Pleinweg ↔ Maastunnel ↔ 's-Gravendijkwal (`corridor-maastunnel-northbound`, `corridor-maastunnel-southbound`)
-
-### Database Table `city_traffic_segments`
-```sql
-CREATE TABLE city_traffic_segments (
-    id VARCHAR(128) PRIMARY KEY,
-    name VARCHAR(256) NOT NULL,
-    road_type VARCHAR(32) NOT NULL, -- motorway, urban_arterial
-    free_flow_seconds INTEGER NOT NULL,
-    current_travel_time_seconds INTEGER NOT NULL,
-    delay_seconds INTEGER NOT NULL,
-    speed_kmh FLOAT NOT NULL,
-    congestion_level VARCHAR(32) NOT NULL, -- free_flow, moderate, heavy, standstill
-    district VARCHAR(128),
-    geom geometry(LineString, 4326) NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL
-);
-CREATE INDEX idx_traffic_segments_geom ON city_traffic_segments USING GIST (geom);
-CREATE INDEX idx_traffic_segments_congestion ON city_traffic_segments (congestion_level);
-CREATE INDEX idx_traffic_segments_road_type ON city_traffic_segments (road_type);
-```
-
----
-
-## 4. The Production-Grade Crowdness Engine & Real-Time Forecaster (Platform v1.9.0)
-
-Target metric: Normalized Crowdness Index $\mathcal{C} \in [0, 100]$.
-- `0 - 25`: Quiet (Rustig)
-- `26 - 50`: Moderate (Normaal)
-- `51 - 75`: Busy (Druk)
-- `76 - 100`: Saturated / Peak (Zeer druk / Piek)
-
-### Quantitative Model Specification
-- **Live Residual:** $\Delta_d(t_0) = \mathcal{C}_{\text{live}}(d, t_0) - \hat{\mathcal{C}}_d(t_0)$
-- **Horizon Forecast:** $\mathcal{C}_d(t_0 + h) = \text{Clamp}\Big(\hat{\mathcal{C}}_d(t_0 + h) + \Delta_d(t_0) \times e^{-0.5 h}, \, 0, \, 100\Big)$
-- **Strict Invariant:** At $h=0$, $\mathcal{C}_d(t_0) \equiv \mathcal{C}_{\text{live}}(d, t_0)$ with zero double-counting.
-
----
-
-## 5. REST API Endpoints Reference Matrix
-
-All endpoints return RFC 7946 GeoJSON or structured JSON. Responses are cached in Redis with sub-5ms performance (< 30ms on database cache miss).
-
-### A. Traffic & Mobility Subsystem (`/api/v1/mobility`)
-
-| Endpoint | Method | Description | Cache TTL |
-| :--- | :--- | :--- | :--- |
-| `/api/v1/mobility/traffic` | `GET` | **Master Live Traffic GeoJSON FeatureCollection**: 18 LineString corridors with speeds, travel times, delays, and congestion tiers. Filter by `road_type`, `congestion_level`, `district`, `bbox`. ETag 304 supported. Sub-5ms cached. | 180s (3m) |
-| `/api/v1/mobility/traffic/overview` | `GET` | Municipal traffic summary: corridor counts by congestion tier, average motorway & arterial speeds, total delay minutes, most congested corridor. ETag 304 supported. | 180s (3m) |
-| `/api/v1/mobility/traffic/{segment_id}` | `GET` | Single corridor performance indicators and LineString geometry by ID (e.g., `corridor-a16-southbound`). | 180s (3m) |
-| `/api/v1/mobility` | `GET` | Unified mobility feed: parking garages, movable bridges, shared bikes (GBFS), and transit alerts. | 15s |
-| `/api/v1/mobility/roadworks` | `GET` | Active road closures, lane disruptions, and municipal roadwork permits from VGW. | 300s (5m) |
-
-### B. Crowdness Engine & Forecaster (`/api/v1/crowd`)
-
-| Endpoint | Method | Description | Cache TTL |
-| :--- | :--- | :--- | :--- |
-| `/api/v1/crowd/live` | `GET` | **Master Live Crowdness GeoJSON FeatureCollection**: 19 district polygons with live index, status, components, and ETag 304 polling support. Sub-5ms cached. | 900s (15m) |
-| `/api/v1/crowd/districts/{name}` | `GET` | District crowd passport + 24-hour autoregressive forecast projection series (horizons 0h to 24h). | 900s (15m) |
-| `/api/v1/crowd/forecast` | `GET` | Multi-horizon forecast matrix across all 19 districts (filter by `district`). | 900s (15m) |
-| `/api/v1/crowd/history` | `GET` | Historical crowd telemetry from indexed `crowd_telemetry_history` table (`district`, `hours`, `limit`). Sub-30ms execution. | 300s (5m) |
-| `/api/v1/crowd/overview` | `GET` | Municipal summary: citywide average crowd index, busiest district, quietest district, garage occupancy %. | 900s (15m) |
-
-### C. Events, Stadiums & Cultural Agendas (`/api/v1/events`)
-
-| Endpoint | Method | Description | Cache TTL |
-| :--- | :--- | :--- | :--- |
-| `/api/v1/events` | `GET` | **Master Events GeoJSON FeatureCollection**: Filter by `subcategory`, `source`, `district`, `venue`, `q`, `date_from`, `date_to`, `bbox`, with pagination. Sub-5ms cached. | 300s (5m) |
-| `/api/v1/events/venues` | `GET` | Verified cultural venues, stadiums, and concert halls with active event counts and coordinates. | 600s (10m) |
-| `/api/v1/events/festivals` | `GET` | Dedicated endpoint for Rotterdam municipal festivals and open cultural agendas (IFFR, Marathon, North Sea Jazz, etc.). | 600s (10m) |
-| `/api/v1/events/stadiums` & `/fixtures` | `GET` | Rotterdam football stadium fixtures (Stadion Feijenoord / De Kuip, Sparta-Stadion Het Kasteel, Woudestein). Filter by `club`. | 600s (10m) |
-| `/api/v1/events/stats` | `GET` | Aggregate event counts by subcategory, data provider, district, and top venues. | 300s (5m) |
-| `/api/v1/events/{event_id}` | `GET` | Single event detail RFC 7946 GeoJSON Feature by unique ID. | 600s (10m) |
-
-### D. Demographics, Housing & District Passports (`/api/v1/living`)
-
-| Endpoint | Method | Description | Cache TTL |
-| :--- | :--- | :--- | :--- |
-| `/api/v1/living/demographics` | `GET` | Demographic profiles across all 19 districts. Filterable by `district`. | 3600s (1h) |
-| `/api/v1/living/demographics/overview` | `GET` | High-level municipal totals: 673k pop, 348k dwellings, density, age breakdown. | 3600s (1h) |
-| `/api/v1/living/housing` | `GET` | Housing analytics per district: residential units, avg/median $m^2$, era splits, WOZ. | 3600s (1h) |
-| `/api/v1/living/districts/{district_name}/passport` | `GET` | **Unified District Passport**: Consolidated RFC 7946 GeoJSON Feature. | 3600s (1h) |
-
-### E. Situational Live Feed, Weather & Spatial Baselines
-
-| Endpoint | Method | Description |
-| :--- | :--- | :--- |
-| `/api/v1/live` | `GET` | Unified multi-layer situational feed (emergencies, mobility, weather, events, crowd). |
-| `/api/v1/emergencies` | `GET` | Real-time P2000 112 emergency dispatches (Brandweer, Ambulance, Politie). |
-| `/api/v1/weather/live` | `GET` | Current weather overview (temp, rain nowcast, stations, radar tile). |
-| `/api/v1/spatial/districts` | `GET` | Canonical CBS/PDOK polygons of the 19 Rotterdam municipal districts. |
-
----
-
-## 6. Background Worker Scheduling Matrix
-
-Orchestrated by [`scheduler.py`](file:///home/homeaccount/rotterdam-live-api/app/ingestion/scheduler.py) using `AsyncIOScheduler`:
-
-```mermaid
-flowchart LR
-    subgraph "High-Frequency Loops (30s - 1m)"
-        TRAFFIC_LOOP["Traffic Engine Harvester (60s)"]
-        P2000["P2000 Emergencies (45s)"]
-        GARAGES["Parking Garages (60s)"]
-        BRIDGES["Movable Bridges (120s)"]
-    end
-
-    subgraph "Nowcast & Radar Loops (5m)"
-        RAIN_NC["Buienradar Rain Nowcast (5m)"]
-        RADAR_TILES["RainViewer Radar Tiles (5m)"]
-    end
-
-    subgraph "Environmental, Events, Utilities & Crowd Loops (10m - 30m)"
-        CROWD_HARV["Rotterdam Crowdness Engine (10m)"]
-        KNMI_ST["KNMI Weather Stations (10m)"]
-        WATERWAYS["Waterways NAP Levels (10m)"]
-        ROADWORKS["Roadworks Closures (15m)"]
-        OUTAGES["Stedin Power Outages (15m)"]
-        CLEANUP["Purge Stale Events (15m)"]
-        EVENTS_HARV["Rotterdam Events Harvester (30m)"]
-    end
-
-    subgraph "Heavy Civic & Spatial Batches (6h - 7d)"
-        CAMERAS["Outdoor Camera Harvester (6 hrs)"]
-        AMENITIES["Civic Amenities (24 hrs)"]
-        RETAIL["Retail Harvester (24 hrs)"]
-        BAG_HARV["Kadaster BAG Addresses (7 days)"]
-        LIVING["Living Domain Harvester (7 days)"]
-    end
-```
-
----
-
-## 7. Frontend Integration Guide (Svelte & MapLibre GL)
-
-### Consuming the /mobility/traffic Domain
-```javascript
-import { 
-  fetchLiveTraffic, 
-  fetchTrafficOverview, 
-  fetchTrafficSegment,
-  installTrafficMapLayer,
-  setTrafficVisibility 
-} from '$lib/trafficClient.js';
-
-// 1. Fetch master traffic GeoJSON across Ring & arterials (< 5ms)
-const trafficGeoJSON = await fetchLiveTraffic({ road_type: 'motorway' });
-
-// 2. Install interactive vector LineString flow layer on MapLibre GL
-installTrafficMapLayer(map);
-
-// 3. Fetch municipal traffic overview telemetry
-const overview = await fetchTrafficOverview();
-console.log(overview.average_speed_kmh, overview.total_delay_minutes, overview.most_congested_corridor);
-
-// 4. Toggle visibility dynamically
-setTrafficVisibility(map, true);
-```
-
-### Consuming the /crowd Domain
-```javascript
-import { 
-  fetchLiveCrowdness, 
-  fetchDistrictCrowdProfile, 
-  fetchCrowdForecast, 
-  installCrowdMapLayer 
-} from '$lib/crowdClient.js';
-
-// Fetch master crowdness GeoJSON across all 19 districts (< 5ms)
-const crowdGeoJSON = await fetchLiveCrowdness();
-installCrowdMapLayer(map, { opacity: 0.5 });
-```
-
----
-
-## 8. Automated Test Suite & Quality Assurance
-
-All 84 automated tests run inside the container with clean connection pooling and event loop isolation (`tests/conftest.py`):
-
-```text
-============================= test session starts ==============================
-rootdir: /app, configfile: pyproject.toml, testpaths: tests
-plugins: anyio-4.15.1, asyncio-1.4.0
-
-tests/test_addresses.py .....                                            [  5%]
-tests/test_api_endpoints.py ....                                         [ 10%]
-tests/test_crowd.py .................                                    [ 30%]
-tests/test_events.py ...........                                         [ 44%]
-tests/test_geocoding.py ....                                             [ 48%]
-tests/test_ingestion_parsers.py ...                                      [ 52%]
-tests/test_live_ingestion_smoke.py .....                                 [ 58%]
-tests/test_living.py ........                                            [ 67%]
-tests/test_retail.py .....                                               [ 73%]
-tests/test_schemas.py ...                                                [ 77%]
-tests/test_search.py ...                                                 [ 80%]
-tests/test_traffic.py .........                                          [ 91%]
-tests/test_weather.py .......                                            [100%]
-
-============================== 84 passed in 7.99s ==============================
-```
-
-* **Pass Rate:** **100% (84 passed, 0 failed, 0 warnings)**
-* **Execution Time:** ~7.99 seconds
-
----
-
-## 9. Repository & Git Status
-
-* **Backend Repository:** [`github.com/Linekai5/rotterdam-live-api`](https://github.com/Linekai5/rotterdam-live-api) (Private, `main` branch synced)
-* **Frontend Repository:** [`github.com/Linekai5/Rott-live`](https://github.com/Linekai5/Rott-live) (Private, `main` branch synced)
+# Rotterdam Live — City Explorer & Live Weather Architecture
+
+Architecture revision 2.8.0 · 11 November 2026 · Development branch: `malidev`
+
+This public overview describes the current development implementation. The session
+changes have not been deployed to production. The full repository specification is
+`rotterdam_live_api_architecture.txt` at the repository root; its repository mirrors
+include `docs/artifacts/rotterdam_live_master_architecture.md`. The backend
+under `api/` is supplied privately and excluded from the tracked source tree.
+Repository history still requires separate clearance before publication; see
+`docs/publication.md` in the repository. Public CI does not deploy.
+
+## Data flow
+
+Open-Meteo / KNMI model samples, Buienradar station observations and point rain
+predictions, and RainViewer radar metadata enter background weather harvesters.
+The worker validates and normalizes them into Redis snapshots. Station records
+also update PostGIS amenities and live events. FastAPI serves the snapshots to the
+Svelte / MapLibre frontend. The browser retrieves radar image tiles from RainViewer.
+
+Local development uses Vite on port 5173. Its `/api` and `/health` proxy forwards
+to FastAPI on port 8000. The browser requests model weather every minute, radar
+metadata only while enabled, and health every ten seconds. Ingestion refreshes the model grid every two minutes,
+point rain/radar metadata every five minutes, and stations every ten minutes.
+Polling cadence is separate from the model valid time and provider update cadence.
+
+## On-demand city explorer
+
+The graphite explorer uses self-hosted Instrument Sans, a custom bridge mark,
+warm ivory SVG symbols and restrained sage accents. Map layers, In view and Map
+sections have coordinated tab, panel, filter and selection transitions, with
+reduced motion support. Every optional data layer starts off. Users can select
+events, neighbourhoods, shops, useful facilities, traffic, parking, bridges,
+roadworks, estimated district activity, emergency reports, local news and
+environmental records, plus mapped camera locations. City pulse is a model estimate, not a count of people;
+directories and annual statistics are labelled separately from current reports.
+
+Selected layers use the existing GeoJSON API, with two explorer requests at a
+time, a 400ms map-movement debounce, cancellation and a bounded 45-second cache.
+Most feeds request the current bounding box and at most 150 records; a notice
+asks users to zoom in when the cap is reached. Point clusters and an explicit
+Show more keep dense results manageable. Loading, stale, error and retry states
+are visible. Selected feeds refresh every minute while the page is visible.
+
+Search is debounced and supports Cmd/Ctrl+K and keyboard selection. Location
+details show typed metrics, source timestamps and safe source links. District
+profiles are requested only when opened and show the year of annual statistics.
+Aerial, Night and Atlas maps retain selected layers and preferences. The desktop
+panel can collapse; mobile uses an explorer sheet and a location sheet. Short
+panel/camera transitions respect reduced motion, including freezing idle cloud
+animation. No AI supervisor is mounted or requested.
+
+Map points use original category/subtype SVGs, rasterized locally at 2× for
+MapLibre. Tickets, concerts, bridges, cameras, parking, shops, water taps, toilets,
+AEDs and other places have distinct glyphs. Cluster plaques show their category
+and count. Hover previews and selected-record metrics connect the map to details.
+MapLibre geometry getters are copied explicitly so a selected marker keeps its
+location. Mobile controls have expanded touch targets and a conditional scroll cue.
+
+Camera records now require explicit OpenStreetMap camera tags. Inferred cameras
+at ordinary businesses and placeholder public streams were retired. The current
+directory provides source links and mapped locations, not public video footage.
+An unavailable upstream refresh preserves prior sourced records. Camera public-feed
+filters are disjoint, and retail bounds use the shared coordinate validator.
+
+Browser API requests use the serving origin via a shared apiBase module. Vite
+proxies them on 5173; the local built Docker preview on 8080 proxies them through
+its Nginx to FastAPI on 8000. This removes the built localhost frontend's previous
+cross-origin port-8000 failure. An explicit VITE_API_BASE_URL override remains.
+
+## Weather contracts
+
+- `/api/v1/weather/live`: station/model overview, existing 12-node model grid,
+  solar position, source and freshness status.
+- `/api/v1/weather/grid`: the same 12-point spatial sample mesh as structured nodes
+  and GeoJSON features. It is not a network of 12 observation stations.
+- `/api/v1/weather/stations` and `/stations/{station_id}`: point observations.
+- `/api/v1/weather/rain-forecast`: approximately two hours of five-minute point
+  predictions, with dated UTC slot timestamps and an explicit availability status.
+- `/api/v1/weather/radar`: radar frame metadata, with `latest_frame` chosen only
+  from past frames. The UI shows the latest observed frame, not a future timeline.
+
+Every requested model field must be numeric and finite, with a valid model time
+and positive accumulation interval. Precipitation amounts become interval-average
+hourly rates using `amount * 3600 / interval`. Model and observation times remain
+separate from response assembly time. A failed provider fetch does not produce
+invented weather or an all-dry rain prediction.
+
+Grid/live snapshots have a 120-second TTL. Labelled last-good snapshots can be
+retained for a day, preserving their original timestamps. Point-rain/radar cache
+TTLs are five minutes; station snapshots use ten minutes. Weather routes still
+harvest on cache misses, so cache-hit latency targets do not cover cold requests.
+
+## Live UI and observed rain
+
+The controller requires a complete validated grid, source times, solar angles,
+and explicit freshness status. It starts without weather values. Accepted data
+older than 30 minutes, more than five minutes in the future, labelled stale by the
+backend, or followed by a failed refresh becomes outdated. Model cloud effects
+stop while stale; prior values can remain visible with their original time.
+
+The muted charcoal card consistently shows Rotterdam Centrum model values:
+temperature, weather description, wind speed/direction, cloud cover and rain rate.
+It shows Live / Outdated / Unavailable, a Rotterdam-local valid time, source details,
+manual refresh and radar attribution. Current Rotterdam date/time lives inside
+the dashboard, separately from the model valid time. Clicking its main button
+collapses the dashboard into a compact temperature/status view; clicking again
+expands it. Desktop starts expanded and mobile starts compact. Collapsing it does
+not disable clouds or polling. There are no presets or simulator controls.
+
+Observed rain uses a separate raster layer. Radar frames older than 20 minutes or
+more than five minutes in the future are removed. Source zoom is capped at 7;
+further map zoom does not create additional radar detail. Frame time is composite
+metadata and is not necessarily every radar pixel's observation time.
+
+## Cloud appearance
+
+The final cloud renderer uses two continuous 3D density fields, with 16 depth
+samples per deck and two density probes toward the sun for self-shadowing. A
+regional envelope, multiple scales of noise, vertical taper and erosion produce
+cloud bodies, irregular edges and gaps. Light transmission supplies lit crowns,
+shaded interiors and translucent edges. Colour/alpha accumulate front-to-back.
+
+The lower visual deck combines low and middle cloud cover at fixed illustrative
+heights of 900–2400m. The upper deck uses high cover at 3000–3650m. These are not
+observed cloud heights. Approximate camera projection creates parallax; model 10m
+wind drives drift. The canopy fades with zoom to expose street details.
+
+Clouds are rendered into a reduced-resolution framebuffer and composited over the
+map. The long edge is capped at 920 pixels at rest and 640 during map movement,
+with a 33ms idle repaint timer. Performance depends on the device; a short local
+browser sample measured approximately 30 FPS, not a universal 60 FPS guarantee.
+
+Generated rain streaks and random lightning flashes were removed. Fog geography
+remains illustrative. Model storm flags are metadata, not observed lightning or
+calibrated probabilities. Cloud cover percentage is not a map opacity target.
+Cloud shape and position remain procedural, without a satellite mask.
+
+Rain radar starts off and loads metadata/tiles only after it is enabled in Map.
+Its switch is independent of cloud atmosphere. Map credits and provider/license links are available
+inside Map settings. Bottom credit overlays, coordinates and zoom/reset controls
+have been removed following the annotated UI review.
+The model atmosphere starts enabled on Aerial. Night and Atlas show their
+vector base maps. Returning to Aerial applies the cloud preference again. The
+weather card reads the live model in every view.
+
+## Language and map navigation
+
+The NL/EN switch changes the interface, including weather conditions, dates and
+number formats. The browser saves the chosen language. Provider names, titles
+and descriptions use their source wording.
+
+MapLibre applies the bounds of the loaded Rotterdam tiles during navigation.
+Dragging past the edge keeps the camera inside the coverage area and allows
+panning back toward the city.
+
+## Session verification and remaining work
+
+The 10 November checks passed: fourteen unit/spatial tests, twenty-three browser
+checks (including the actual built Docker preview), the full backend suite of
+111 tests, and the Vite/Docker builds. All thirteen selected map layers loaded
+actual API data through the UI, with no optional datasets requested on startup.
+The browser regression checks a compiled shader and actual framebuffer pixels,
+including cloud bodies and gaps; layer registration alone is insufficient.
+Overhead/tilted screenshots and desktop/mobile layout were inspected locally.
+
+These checks verify software behaviour, not forecast accuracy. Satellite cloud
+outlines, cloud-level winds/heights, regular-grid expansion, station bias correction,
+direct KNMI spatial radar integration and multi-week accuracy measurement remain
+future work. A push to `malidev` does not trigger the `main` production workflow.
+The former `feat/live-spatial-weather` branch has been removed; its history and
+the development changes are retained on `malidev`.

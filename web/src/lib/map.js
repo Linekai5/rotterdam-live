@@ -6,11 +6,18 @@ import styleDark from './style_dark.json';
 import { installCoastalOcean, removeCoastalOcean, OCEAN_LAYER } from './coastalOcean.js';
 import { installLiveEvents, filterLiveEvents } from './liveLayers.js';
 import { installTrafficMapLayer, setTrafficVisibility } from './trafficClient.js';
+import { MAX_ZOOM_LIMIT, calculateResponsiveMinZoom, installResponsiveMinZoom } from './cameraPhysics.js';
+import { WEATHER_LAYER_ID } from './weatherEngine.js';
 
-export { installLiveEvents, filterLiveEvents, installTrafficMapLayer, setTrafficVisibility };
+export {
+  installLiveEvents,
+  filterLiveEvents,
+  installTrafficMapLayer,
+  setTrafficVisibility
+};
 
 /**
- * Rotterdam coordinate bounding box [SW, NE]
+ * Coverage of the Rotterdam map tiles [SW, NE]
  */
 export const ROTTERDAM_BOUNDS = [
   [4.379, 51.861],
@@ -42,6 +49,13 @@ export const STYLE_CONFIGS = {
 };
 
 export async function initMap(mapElement, onReady) {
+  // Keep base-map attribution available in every visual mode.
+  for (const config of Object.values(STYLE_CONFIGS)) {
+    if (config.style.sources.openmaptiles) {
+      config.style.sources.openmaptiles.attribution = STYLE_CONFIGS.satellite.style.sources.openmaptiles.attribution;
+    }
+  }
+
   // Update live planet endpoints in background (non-blocking)
   fetch('https://tiles.openfreemap.org/planet')
     .then(res => res.ok ? res.json() : null)
@@ -78,27 +92,30 @@ export async function initMap(mapElement, onReady) {
   }
 
   const pageOrigin = typeof window !== 'undefined' ? window.location.origin : (typeof location !== 'undefined' ? location.origin : '');
+  const responsiveMinZoom = calculateResponsiveMinZoom(mapElement);
 
   const map = new maplibregl.Map({
     container: mapElement,
     style: config.style,
     center: [4.48, 51.92],
-    zoom: initialZoom || 12,
-    minZoom: 8,
-    maxZoom: 20,
-    interactive: false,
-    dragPan: false,
-    scrollZoom: false,
-    boxZoom: false,
-    dragRotate: false,
-    keyboard: false,
-    doubleClickZoom: false,
-    touchZoomRotate: false,
-    touchPitch: false,
-    pitchWithRotate: false,
+    zoom: initialZoom ? Math.max(responsiveMinZoom, Math.min(MAX_ZOOM_LIMIT, initialZoom)) : 11.6,
+    minZoom: responsiveMinZoom,
+    maxZoom: MAX_ZOOM_LIMIT,
+    maxBounds: ROTTERDAM_BOUNDS,
+    interactive: true,
+    dragPan: true,
+    scrollZoom: true,
+    boxZoom: true,
+    dragRotate: true,
+    keyboard: true,
+    doubleClickZoom: true,
+    touchZoomRotate: true,
+    touchPitch: true,
+    pitchWithRotate: true,
     maxPitch: 65,
     antialias: true,
     renderWorldCopies: false,
+    // Source credits are available in the explorer's Map settings.
     attributionControl: false,
     maxTileCacheSize: 500,
     fadeDuration: 0,
@@ -128,6 +145,7 @@ export async function initMap(mapElement, onReady) {
   if (typeof window !== 'undefined') window.map = map;
 
   installCoastalOcean(map);
+  installResponsiveMinZoom(map);
 
   map.on('load', () => {
     try { map.resize(); } catch (e) {}
@@ -137,9 +155,6 @@ export async function initMap(mapElement, onReady) {
         map.fitBounds(ROTTERDAM_BOUNDS, { padding: 40, animate: false });
       }
     }
-    // Keep API connection active in frontend, but do not render live clutter on the map
-    // installLiveEvents(map);
-    // installTrafficMapLayer(map);
     if (onReady) onReady(map);
   });
 
@@ -158,6 +173,9 @@ export function switchStyle(map, mode, state = {}) {
 
   // Use diff: true to prevent reload flicker and preserve camera position
   removeCoastalOcean(map);
+  if (map.getLayer(WEATHER_LAYER_ID)) {
+    map.removeLayer(WEATHER_LAYER_ID);
+  }
   map.setStyle(config.style, { diff: true });
 
   const container = map.getContainer();
@@ -165,16 +183,13 @@ export function switchStyle(map, mode, state = {}) {
     container.style.backgroundColor = config.bgColor;
   }
 
-  // Restore detail preferences after the new style is available.
+  // Restore preferences outside the render pass that emits styledata.
   map.once('styledata', () => {
-    if (state.labels === false) {
-      toggleLabels(map, false);
-    }
-    if (state.buildings3d) {
-      toggle3DBuildings(map, true);
-    }
-    // installLiveEvents(map);
-    // installTrafficMapLayer(map);
+    queueMicrotask(() => {
+      if (!map.getStyle()) return;
+      if (state.labels === false) toggleLabels(map, false);
+      if (state.buildings3d) toggle3DBuildings(map, true);
+    });
   });
 }
 
@@ -184,7 +199,7 @@ export function toggleLabels(map, visible) {
   if (!style || !style.layers) return;
   const visibility = visible ? 'visible' : 'none';
   style.layers.forEach(l => {
-    if (l.type === 'symbol') {
+    if (l.type === 'symbol' && !l.id.startsWith('explore-') && !l.id.startsWith('explorer-selection')) {
       try {
         map.setLayoutProperty(l.id, 'visibility', visibility);
       } catch (e) {}
@@ -231,5 +246,6 @@ export function toggle3DBuildings(map, enabled) {
 
 export function resetView(map) {
   if (!map) return;
-  map.fitBounds(ROTTERDAM_BOUNDS, { padding: 40, duration: 800 });
+  const reducedMotion = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  map.fitBounds(ROTTERDAM_BOUNDS, { padding: 40, pitch: 0, bearing: 0, duration: reducedMotion ? 0 : 800 });
 }

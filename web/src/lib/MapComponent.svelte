@@ -2,20 +2,33 @@
   import { onMount, onDestroy } from 'svelte';
   import { initMap } from './map.js';
   import { API_BASE_URL } from './liveLayers.js';
+  import { createWeatherEngineController } from './weatherEngine.js';
+  import { t } from './i18n.js';
+  import CityExplorer from './CityExplorer.svelte';
+  import WeatherHud from './WeatherHud.svelte';
 
   let mapElement;
   let map = null;
   let pingInterval = null;
+  let weatherController = null;
+  let apiStatus = 'connecting';
+  let mapError = false;
+  let removed = false;
+  let weatherState = { status: 'unavailable', enabled: true, nodes: [] };
+
+  $: if (map) map.getCanvas().setAttribute('aria-label', $t('Map canvas'));
 
   // Active background connection with the API
   async function checkApiConnection() {
     try {
-      await fetch(`${API_BASE_URL}/health/live`, {
+      const response = await fetch(`${API_BASE_URL}/health/live`, {
         cache: 'no-store',
+        signal: AbortSignal.timeout(8000),
         headers: { 'Accept': 'application/json' }
       });
+      if (!removed) apiStatus = response.ok ? 'connected' : 'offline';
     } catch (err) {
-      // silent background connection check
+      if (!removed) apiStatus = 'offline';
     }
   }
 
@@ -24,19 +37,27 @@
     checkApiConnection();
     pingInterval = setInterval(checkApiConnection, 10000);
 
-    // 2. Initialize non-interactive map
+    // 2. Initialize the map and validated live weather controller.
     try {
       map = await initMap(mapElement, (loadedMap) => {
         map = loadedMap;
         if (typeof window !== 'undefined') window.map = loadedMap;
       });
+      if (removed) { map.remove(); return; }
       if (typeof window !== 'undefined') window.map = map;
+
+      weatherController = createWeatherEngineController(map, (nextState) => {
+        weatherState = nextState;
+      });
+      if (typeof window !== 'undefined') window.weatherController = weatherController;
     } catch (err) {
+      if (!removed) mapError = true;
       console.error('MapComponent: initMap error!', err);
     }
   });
 
   onDestroy(() => {
+    removed = true;
     if (pingInterval) clearInterval(pingInterval);
     if (map) {
       map.remove();
@@ -49,15 +70,19 @@
 </script>
 
 <div class="map-wrapper">
-  <!-- Map Canvas: Full-screen background, non-interactive -->
+  <!-- Interactive map: pan, zoom, pitch (0-65°) and bearing rotation. -->
   <div bind:this={mapElement} class="map-container" style="background-color: {defaultBg}"></div>
 
-  <!-- Centered "rotterdam will be live soon" div (Basic Dark Style) -->
-  <div class="center-overlay">
-    <div class="message-box">
-      Rotterdam will be live soon
+  <!-- Live weather card with source time, status and radar attribution. -->
+  <WeatherHud {weatherController} {weatherState} />
+  {#if map}<CityExplorer {map} {weatherController} {weatherState} {apiStatus} />{/if}
+  {#if mapError}
+    <div class="map-error" role="alert">
+      <h1>{$t('The map couldn’t start.')}</h1>
+      <p>{$t('Try reloading the page to reconnect to Rotterdam.')}</p>
+      <button on:click={() => window.location.reload()}>{$t('Reload map')}</button>
     </div>
-  </div>
+  {/if}
 </div>
 
 <style>
@@ -66,9 +91,9 @@
     inset: 0;
     width: 100vw;
     height: 100vh;
+    height: 100dvh;
     overflow: hidden;
-    user-select: none;
-    pointer-events: none;
+    pointer-events: auto;
   }
 
   .map-container {
@@ -77,43 +102,13 @@
     position: absolute;
     inset: 0;
     background-color: #0c0c0c;
-    pointer-events: none;
+    pointer-events: auto;
+    touch-action: none;
   }
 
-  .map-container :global(:focus) {
-    outline: none !important;
-    box-shadow: none !important;
-  }
-
-  .center-overlay {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 16px;
-    z-index: 50;
-    pointer-events: none;
-  }
-
-  .message-box {
-    background-color: rgba(14, 14, 14, 0.92);
-    border: 1px solid #2a2a2a;
-    border-radius: 8px;
-    padding: 20px 32px;
-    color: #e5e5e5;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    font-size: 18px;
-    font-weight: 500;
-    letter-spacing: -0.01em;
-    text-align: center;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
-  }
-
-  @media (max-width: 480px) {
-    .message-box {
-      font-size: 16px;
-      padding: 16px 24px;
-    }
-  }
+  .map-container :global(canvas:focus-visible) { outline: 2px solid #b0c19a; outline-offset: -4px; }
+  .map-error { position: absolute; inset: 0; display: grid; place-content: center; padding: 25px; background: #191f1a; color: #dce3d1; font: 14px system-ui, sans-serif; }
+  .map-error h1 { font: 36px Georgia, serif; }
+  .map-error button { padding: 12px; border: 1px solid #9dab8a; border-radius: 8px; background: #303b2a; color: inherit; cursor: pointer; }
 </style>
+
