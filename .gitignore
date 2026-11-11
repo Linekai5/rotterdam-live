@@ -4,6 +4,31 @@
 /.gemini/
 /.github/workflows/deploy.yml
 
+# Local workspace configuration
+GEMINI.md
+gemini.md
+AGENTS.md
+agents.md
+CLAUDE.md
+claude.md
+CODEX.md
+codex.md
+.agents/
+.gemini/
+.codex/
+.claude/
+.cursor/
+.continue/
+.roo/
+.cline/
+.windsurf/
+.opencode/
+.aider*
+.cursorrules
+.cursorignore
+/.github/copilot-instructions.md
+/.github/instructions/
+
 # Environment & secrets; examples contain placeholders only
 .env
 .env.*
