@@ -6,7 +6,8 @@ test('the welcome banner dismisses anywhere without activating the control under
   await expect(notice).toBeVisible();
   const image = notice.getByRole('img');
   await image.evaluate(element => element.decode());
-  expect(await image.evaluate(element => element.naturalWidth)).toBe(1678);
+  await expect(image).toHaveAttribute('src', /RotterdamLiveUnderDevelopmentCrew/);
+  expect(await image.evaluate(element => element.naturalWidth)).toBeGreaterThan(0);
 
   // Click over the weather card: the first click should only dismiss the notice.
   const weather = page.locator('.weather-hud button').first();
@@ -46,7 +47,8 @@ test('the banner stays centered and compact on desktop, small phones, and landsc
     expect(box.x + box.width).toBeLessThanOrEqual(viewport.width - 16);
     expect(Math.abs(box.x + box.width / 2 - viewport.width / 2)).toBeLessThan(1);
     expect(Math.abs(box.y + box.height / 2 - viewport.height / 2)).toBeLessThan(24);
-    expect(box.width / box.height).toBeCloseTo(1678 / 937, 2);
+    const aspectRatio = await image.evaluate(element => element.naturalWidth / element.naturalHeight);
+    expect(box.width / box.height).toBeCloseTo(aspectRatio, 2);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(viewport.width);
     await page.mouse.click(viewport.width - 8, viewport.height - 8);
     await expect(notice).toHaveCount(0);

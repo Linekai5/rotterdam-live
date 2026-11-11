@@ -7,7 +7,7 @@ changes have not been deployed to production. The full repository specification 
 `rotterdam_live_api_architecture.txt` at the repository root; its repository mirrors
 include `docs/artifacts/rotterdam_live_master_architecture.md`. The backend
 under `api/` is supplied privately and excluded from the tracked source tree.
-Branch histories have been sanitized; GitHub PR refs and cached views still require Support clearance before publication; see
+Branch histories have been sanitized; GitHub PR refs and cached views still await Support cleanup; publication was explicitly requested with that cleanup outstanding; see
 `docs/publication.md` in the repository. Public CI does not deploy.
 
 ## Data flow

@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import artwork from '../../workercrew/RotterdamLiveDevelopmentCrew.png';
+  import artwork from '../../workercrew/RotterdamLiveUnderDevelopmentCrew.png';
   import { t } from './i18n.js';
 
   export let onDismiss = () => {};
@@ -16,7 +16,7 @@
       id="development-message"
       src={artwork}
       alt={$t('Rotterdam Live is still in active development. Some things might not work yet.')}
-      width="1678"
+      width="1679"
       height="937"
       draggable="false"
     />

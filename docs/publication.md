@@ -12,7 +12,9 @@ Both branch histories have been rewritten to remove backend source,
 deployment addresses and credential literals. Audits of reachable historical
 file contents and Gitleaks checks passed. GitHub still retains old commits in
 pull-request references and cached views; those require its Support cleanup.
-The repository remains private until that separate server-side step is verified.
+On 11 November 2026, the owner explicitly requested publication with that
+server-side cleanup still outstanding. Publication does not confirm that old
+cached commits or pull-request references have been purged.
 
 The existing repository is being retained. Verified private bundles of the original
 history and the sanitized audit records are stored outside the working checkout. The rewrite removes backend paths from before and after the monorepo
@@ -21,13 +23,12 @@ historical files and messages. Changes to commit IDs require other clones to be
 recloned or carefully rebased; merging old history back would undo the cleanup.
 
 Closed pull requests retain old references that cannot be replaced by a
-normal Git push. After the branch rewrite, GitHub Support must remove affected
-pull-request references and cached views before this existing repository is
-made public again. A history rewrite by itself cannot erase other people's
+normal Git push. After the branch rewrite, GitHub Support is still needed to
+remove affected pull-request references and cached views. A history rewrite by itself cannot erase other people's
 copies of data already obtained. See
 [GitHub's removal procedure](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository).
 
-The repository is private during cleanup. Actions are disabled and the
+Actions remain disabled for publication and the
 repository's self-hosted runner has been detached. Old workflow logs and caches
 were backed up privately and removed, the unused production Actions secret
 was removed, and workflow token permissions default to read-only. Keep deployments in trusted
