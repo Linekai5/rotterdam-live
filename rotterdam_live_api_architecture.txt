@@ -1,9 +1,10 @@
 # Rotterdam Live Platform — Master Architectural Specification & Operational Status
 
 > [!NOTE]
-> **Architecture Revision:** 2.7.0 — 11 November 2026 (Dutch and English Interface, Aerial Atmosphere and Map Limits. Application package versions are unchanged.)
+> **Architecture Revision:** 2.8.0 — 11 November 2026 (Public source boundary and documentation cleanup. Application package versions are unchanged.)
 > **Environment:** Hetzner Cloud Linux VPS (`${PUBLIC_BIND_ADDRESS}` / Tailscale `${PRIVATE_BIND_ADDRESS}`)
-> **Unified Repository:** [`github.com/Linekai5/rotterdam-live`](https://github.com/Linekai5/rotterdam-live) (`malidev` development branch; `main` is the deployment branch)
+> **Source Boundary:** `api/` and production automation are private and ignored. Existing history requires separate clearance before publication; see `docs/publication.md`.
+> **Repository:** [`github.com/Linekai5/rotterdam-live`](https://github.com/Linekai5/rotterdam-live) (`malidev` development branch; `main` is the deployment branch)
 > **Interactive Documentation:** `https://rotterdamlive.nl/docs` | `https://rotterdamlive.nl/redoc`
 > **Verification Scope:** Frontend and API changes were implemented and checked locally on ports 5173/8000. They have not been deployed to production in this session. Historical infrastructure figures elsewhere in this document are a platform baseline, not a fresh production audit. See sections 10–14 for validation and limitations.
 
@@ -19,7 +20,7 @@ The platform combines a **PostGIS 16 spatial data store** holding over **396,400
 1. **Cached GeoJSON Performance Target:** Prefer Redis snapshots and indexed PostGIS queries. The historical sub-5ms cache / sub-30ms database figures are targets and prior measurements, not a guarantee for every endpoint or environment.
 2. **Background Ingestion First:** Precompute spatial datasets asynchronously. Current weather routes still perform on-demand harvesting on cache misses, including external HTTP calls and station database work; those paths do not meet the cache-hit latency target. Eliminating this exception requires separate work.
 3. **Dual Network Topologies:** Public web traffic (`rotterdamlive.nl`) is served with genuine Let's Encrypt TLS; the private administrative API gateway (`api.rotterdamlive.nl`) is routed strictly across Tailscale WireGuard over plain HTTP with HSTS headers cleared (`max-age=0`), preventing browser HSTS lockouts while preserving WireGuard end-to-end encryption.
-4. **Unified Monorepo:** Zero Git submodules. Full commit history preserved via `git subtree` merging backend API and frontend web stacks into a unified monorepo.
+4. **Public Source Boundary:** Backend source and deployment automation are supplied privately. The current tracked tree excludes `api/`; historical commits still contain it and must not be published without separate history cleanup or a new public initial commit.
 
 ---
 
@@ -44,7 +45,7 @@ The platform combines a **PostGIS 16 spatial data store** holding over **396,400
 | **Map Rendering Engine** | MapLibre GL JS | 2.x (`^2.4.0` in `web/package.json`) | Vector/raster tiles and custom WebGL weather and ocean layers. |
 | **Testing Framework** | pytest, Node test runner, Playwright | Repository dependencies | Backend contracts, spatial geometry, controller freshness, and browser-rendered weather regression checks. |
 | **Containerization** | Docker & Docker Compose | Docker 27+ / Compose v2 | Multi-container microservices architecture with strict host-level port binding. |
-| **CI/CD** | GitHub Actions | Workflows v4 | Path-filtered continuous integration testing and automated zero-downtime SSH deployment. |
+| **CI/CD** | GitHub Actions | Workflows v4 | GitHub-hosted public-tree checks, frontend tests/build and Nginx validation. Deployment automation is maintained privately. |
 
 ---
 
@@ -363,7 +364,7 @@ The `web/` Svelte 5 SPA is bundled by Vite 7. `App.svelte` mounts `MapComponent.
 * **Observed Rain Layer:** `live-rain-radar` is a separate MapLibre raster source/layer using the latest past RainViewer frame. It starts off and requests metadata/tiles only after Rain radar is enabled in Map. It has its own frame age checks and can remain available when model weather is stale.
 * **Weather Card:** A compact charcoal card shows Centrum temperature, condition, wind, cloud cover, model rain rate, status, and valid time. Its expandable details explain the source and the difference between model values and radar. Muted colours, visible attribution, and responsive sizing replace the previous pill/simulator drawer. There are no weather presets or simulator selection methods.
 * **Polling:** Model weather is fetched on initialization and every 60 seconds; radar metadata follows that cadence only while enabled. Both have independent 15-second timeouts and overlap guards. Selected explorer datasets refresh every minute while the document is visible, and when it becomes visible again. Health is polled every 10 seconds with an 8-second timeout; that ping is not a weather freshness check or a guarantee that every feed is available.
-* **Local Connection:** In Vite development, the default API base is the page origin. `/api` and `/health` are proxied from port 5173 to `http://localhost:8000`. This works from `localhost:5173` and `localhost:5173`. `VITE_API_BASE_URL` can override the default and may require CORS configuration. Production public requests use the existing Nginx `/api` gateway.
+* **Local Connection:** In Vite development, the default API base is the page origin. `/api` and `/health` are proxied from port 5173 to `http://localhost:8000`. This works from `localhost:5173`. `VITE_API_BASE_URL` can override the default and may require CORS configuration. Production public requests use the existing Nginx `/api` gateway.
 * **Rendering Cost:** The offscreen buffer is at most half the drawing-buffer resolution, capped at a 920-pixel long edge while stationary and 640 during movement. A 33ms timer schedules idle repaint requests unless reduced motion is enabled. A prior short local headless Chrome sample measured about 30 browser frames/second; 60 FPS and mobile performance are not guaranteed. Clouds render beneath explorer overlays so selected markers and corridors remain readable. Custom-layer ordering is guarded against recursive MapLibre style events.
 
 ---
@@ -409,13 +410,13 @@ These are scoped local results, not a claim that the entire backend or browser s
 
 ### Continuous Integration (`.github/workflows/ci.yml`)
 Automated GitHub Actions workflow triggered on pull requests and pushes to `main`:
-1. **Path-Filtered Matrix:** Only triggers jobs corresponding to modified directories (`api/**`, `web/**`, `nginx/**`).
-2. **Backend Validation:** Boots PostgreSQL/PostGIS and Redis service containers, initializes/seeds the database, and runs the backend pytest suite using Python 3.12.
-3. **Frontend Validation:** Installs Node 20 dependencies, runs `npm test`, and builds the Svelte/Vite bundle. The workflow currently does not run Playwright, including the new shader regression; that browser check was run locally.
-4. **Nginx Validation:** Executes syntax and schema validation (`nginx -t`).
+1. **Public Tree:** Checks tracked files for private paths, ignored files, documentation IP literals and common credential patterns; runs the publication-check regression suite. It does not inspect historical commits.
+2. **Frontend Validation:** Path-filtered `web/**` job installs Node 20 dependencies, runs `npm test` and builds the Svelte/Vite bundle. Playwright remains a local check requiring the private API for live-feed cases.
+3. **Nginx Validation:** Path-filtered `nginx/**` job runs `nginx -t` with temporary test certificates.
+4. **Private Backend:** Public CI does not build or test the ignored backend. Its checks belong to the private source and automation.
 
-### Continuous Deployment (`.github/workflows/deploy.yml`)
-The workflow is triggered by a push to `main` or manual dispatch and selects a self-hosted runner labelled `self-hosted, rotterdam-vps`. It fetches `main`, builds the production Compose images, recreates API/web/worker services in order, reloads or starts Nginx, and checks health. The workflow name says "zero-downtime", but it does not establish a measured zero-downtime guarantee. This session did not modify or run it. A push to `malidev` does not trigger the automatic production deployment.
+### Production Automation
+The former `.github/workflows/deploy.yml` and machine-specific agent hooks are removed from the tracked tree and ignored, with this machine's local copies retained. Public CI does not deploy. Provision trusted production automation privately, detach self-hosted runners before public release and back up private backend files outside existing deployment checkouts before pulling their removal commit. See `docs/publication.md`. No production deployment or history rewrite was performed by this cleanup.
 
 ---
 
