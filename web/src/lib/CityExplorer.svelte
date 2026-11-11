@@ -5,7 +5,6 @@
   import { createMapDataController } from './mapDataController.js';
   import { MAP_DATASETS, DATASET_BY_ID, featureTitle, featureSubtitle, normalizeFeature, geometryBounds, intersectsBounds, formatDate } from './explorerData.js';
   import { API_BASE_URL } from './liveLayers.js';
-  import { resetView } from './map.js';
   import ExplorerIcon from './ExplorerIcon.svelte';
   import MapAppearance from './MapAppearance.svelte';
   import FeatureDetails from './FeatureDetails.svelte';
@@ -19,16 +18,12 @@
   let tabDirection = 1;
   let category = 'All';
   let hovered = null;
-  let currentTime = new Date();
-  let camera = { lng: 4.48, lat: 51.92, zoom: 11 };
   let panelContent;
   let scrollMore = false;
   function updateScrollCue() { if (panelContent) scrollMore = panelContent.scrollHeight - panelContent.clientHeight - panelContent.scrollTop > 24; }
   function trackOverflow(node) { const observer = new ResizeObserver(updateScrollCue); observer.observe(node); return { destroy: () => observer.disconnect() }; }
   const categories = ['All', 'Discover', 'Move', 'Live city'];
   const sourceType = id => ['districts', 'retail', 'amenities', 'cameras'].includes(id) ? 'Directory' : id === 'events' ? 'Agenda' : id === 'crowd' ? 'Model estimate' : 'Source feed';
-  $: dateLabel = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', timeZone: 'Europe/Amsterdam' }).format(currentTime);
-  $: clockLabel = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam', timeZoneName: 'short' }).format(currentTime);
   let viewMode = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('mode') || 'satellite' : 'satellite';
   let placeLabels = true;
   let buildingHeights = false;
@@ -75,10 +70,6 @@
       if (feature) selectionOrigin = document.activeElement;
       if (feature && mobile()) { restoreMobile = mobileOpen; mobileOpen = false; }
     }, value => hovered = value);
-    const updateCamera = () => { const center = map.getCenter(); camera = { lng: center.lng, lat: center.lat, zoom: map.getZoom() }; hovered = null; };
-    map.on('moveend', updateCamera);
-    updateCamera();
-    const clockTimer = setInterval(() => currentTime = new Date(), 30000);
     const shortcuts = async event => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault(); controller?.select(null); restoreMobile = false; mobileOpen = mobile(); desktopOpen = true; await tick(); searchInput?.focus();
@@ -91,7 +82,7 @@
       }
     };
     window.addEventListener('keydown', shortcuts);
-    return () => { clearInterval(clockTimer); map.off('moveend', updateCamera); breakpoint.removeEventListener('change', viewportChanged); preference.removeEventListener('change', motionChanged); window.removeEventListener('keydown', shortcuts); };
+    return () => { breakpoint.removeEventListener('change', viewportChanged); preference.removeEventListener('change', motionChanged); window.removeEventListener('keydown', shortcuts); };
   });
   onDestroy(() => { controller?.destroy(); clearTimeout(searchTimer); searchAbort?.abort(); });
   function canFocus(feature) {
@@ -153,7 +144,6 @@
 
 <div class="city-shell">
   <header class="identity"><svg class="brand-mark" viewBox="0 0 42 38" fill="none" aria-hidden="true"><path d="M4 31h34M10 31 25 4l5 27M25 4 20 31M25 4l12 24M25 4 5 28" stroke="currentColor" stroke-width="1.3"/><path d="M5 28h32" stroke="currentColor" stroke-width="3"/></svg><div><strong>rotterdam<span>live</span></strong><p>AN OPEN WINDOW ON THE CITY</p></div></header>
-  <div class="city-time"><span>ROTTERDAM, NL</span><time>{dateLabel}<i></i>{clockLabel}</time></div>
   <button class="mobile-trigger" bind:this={mobileTrigger} on:click={toggleExplorer} aria-expanded={mobileOpen} aria-controls="city-explorer">{mobileOpen ? 'Back to the map' : 'Explore the city'}<span>{activeCount ? `${activeCount} layers` : '+'}</span></button>
   <button class="desktop-trigger" bind:this={desktopTrigger} aria-label={desktopOpen ? 'Hide explorer' : 'Show explorer'} title={desktopOpen ? 'Hide explorer' : 'Show explorer'} aria-expanded={desktopOpen} aria-controls="city-explorer" on:click={() => desktopOpen = !desktopOpen}><ExplorerIcon name="layers" size={18}/>{#if activeCount}<span>{activeCount}</span>{/if}</button>
   <aside id="city-explorer" class="explorer" class:desktop-collapsed={!desktopOpen && !isMobile} class:mobile-open={mobileOpen} aria-hidden={!panelVisible} inert={!panelVisible} aria-label="City explorer">
@@ -219,26 +209,22 @@
     <div class="scroll-cue" class:shown={scrollMore} aria-hidden="true">More below <span>↓</span></div>
     <footer><span class="connection" class:offline={apiStatus === 'offline'} aria-live="polite"><i></i>{apiStatus === 'offline' ? 'Connection lost · retrying' : apiStatus === 'connecting' ? 'Connecting…' : isLoading ? 'Updating selected layers…' : activeCount ? `${activeCount} selected · minute updates` : 'Connected to city data'}</span>{#if activeCount}<button on:click={() => {controller?.clear(); controller?.select(null);}}>Clear all</button>{:else}<span class="coordinates">{MAP_DATASETS.length} LAYERS</span>{/if}</footer>
   </aside>
-  <div class="map-tools" class:mobile-covered={mobileOpen || !!selected} aria-label="Map navigation"><button aria-label="Zoom in" on:click={() => map.zoomIn({duration: reduceMotion ? 0 : 350})}>+</button><button aria-label="Zoom out" on:click={() => map.zoomOut({duration: reduceMotion ? 0 : 350})}>−</button><span></span><button aria-label="Reset map view" on:click={() => resetView(map)}><ExplorerIcon name="reset" size={17}/></button></div>
-  <div class="map-note"><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap</a><span>{viewMode === 'satellite' ? 'Aerial imagery: PDOK · OpenFreeMap' : 'Cartography: OpenFreeMap'}</span></div>
-  <div class="view-coordinates"><span class="crosshair">+</span><span>{camera.lat.toFixed(3)}° N&nbsp; / &nbsp;{camera.lng.toFixed(3)}° E</span><span class="view-mode">{viewMode === 'satellite' ? 'AERIAL' : viewMode === 'dark' ? 'NIGHT' : 'ATLAS'}</span></div>
   {#if hovered && !selected}<div class="map-tooltip" style={`left:${Math.max(12,Math.min(hovered.point.x + 18, (map.getContainer()?.clientWidth || 1200) - 265))}px;top:${Math.max(12,Math.min(hovered.point.y - 16,(map.getContainer()?.clientHeight || 900) - 160))}px`}><span>{DATASET_BY_ID[hovered.feature.properties.__dataset]?.label || 'Location'}</span><strong>{featureTitle(hovered.feature)}</strong><small>Select to explore ↗</small></div>{/if}
   {#if selected}<FeatureDetails feature={selected} layerState={selectedLayer} reducedMotion={reduceMotion} canFocus={canFocus(selected)} explorerOpen={desktopOpen} onClose={closeSelection} onFocus={() => moveTo(selected)}/>{/if}
 </div>
 <style>
   .city-shell { --explorer-width:354px; --explorer-inset:24px; --ink:#efeee7; --muted:#a1a79f; --edge:#ffffff19; --surface:#171a19; --accent:#bdc9b0; position:absolute; inset:0; z-index:10; pointer-events:none; color:var(--ink); font:13px 'Instrument Sans','Helvetica Neue',Arial,sans-serif; }
   button,input,select { font:inherit; color:inherit; } button { cursor:pointer; }
-  button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+  button:focus-visible,input:focus-visible,select:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
   button { transition:background .2s,color .2s,border-color .2s,transform .3s cubic-bezier(.2,.8,.2,1); }
   .identity { position:absolute; top:24px; left:24px; display:flex; align-items:center; gap:12px; pointer-events:auto; padding:9px 15px 9px 11px; background:#171a19f5; border:1px solid var(--edge); border-radius:3px; animation:interface-in .75s cubic-bezier(.16,1,.3,1) both; }
   .brand-mark { width:37px; height:36px; color:#e5e8dc; }
   .identity strong { font-weight:600; font-size:22px; letter-spacing:-1.1px; } .identity strong span { font-weight:400; color:#b2c09f; margin-left:1px; }
   .identity p { margin:4px 0 0; font-size:8px; letter-spacing:1.5px; color:#a0a79b; }
-  .city-time { position:absolute; top:37px; left:calc(var(--explorer-inset) + var(--explorer-width) + 30px); display:flex; gap:24px; align-items:center; padding:10px 14px; background:#171a19e8; border-left:1px solid #b5c3a04a; font-size:10px; letter-spacing:1.2px; color:#e7e8df; animation:interface-in .8s .1s both; }
-  .city-time>span { font-weight:600; } .city-time time { display:flex; align-items:center; gap:10px; color:#afb4a8; font-variant-numeric:tabular-nums; } .city-time i { height:3px; width:3px; background:#aab59b; border-radius:50%; }
+
   .desktop-trigger { position:absolute; left:336px; top:33px; pointer-events:auto; width:42px; height:42px; display:grid; place-items:center; border:1px solid var(--edge); border-radius:3px; background:#171a19f5; color:#d6ddcc; }
   .desktop-trigger:hover { background:#30372d; transform:translateY(-2px); } .desktop-trigger>span { position:absolute; top:-6px; right:-6px; padding:2px 5px; min-width:10px; font-size:9px; color:#1a2017; background:var(--accent); border-radius:2px; }
-  .explorer { position:absolute; left:var(--explorer-inset); top:104px; bottom:90px; width:var(--explorer-width); pointer-events:auto; display:flex; flex-direction:column; overflow:hidden; background:#171a19fa; border:1px solid var(--edge); border-radius:4px; box-shadow:0 12px 40px #0003; animation:interface-in .8s .08s cubic-bezier(.16,1,.3,1) both; transition:transform .55s cubic-bezier(.16,1,.3,1),opacity .3s,visibility .4s; }
+  .explorer { position:absolute; left:var(--explorer-inset); top:104px; bottom:24px; width:var(--explorer-width); pointer-events:auto; display:flex; flex-direction:column; overflow:hidden; background:#171a19fa; border:1px solid var(--edge); border-radius:4px; box-shadow:0 12px 40px #0003; animation:interface-in .8s .08s cubic-bezier(.16,1,.3,1) both; transition:transform .55s cubic-bezier(.16,1,.3,1),opacity .3s,visibility .4s; }
   .explorer.desktop-collapsed { animation:none; opacity:0; visibility:hidden; pointer-events:none; transform:translateX(-35px); }
   .intro { position:relative; padding:25px 25px 21px; border-bottom:1px solid #ffffff08; overflow:hidden; flex-shrink:0; }
   .eyebrow { display:block; font-size:9px; font-weight:500; letter-spacing:1.3px; color:#b3b8aa; } .section-index { margin-right:8px; color:#6d7868; }
@@ -279,28 +265,26 @@
   .load-more { display:flex; justify-content:space-between; width:calc(100% - 20px); margin:17px 10px; padding:13px; border:1px solid #b5c4a43b; border-radius:2px; color:#d4dfc8; background:#b7c7a709; font-size:12px; }
   .empty-state { padding:45px 18px; } .empty-state>:global(svg) { color:#a4b596; margin-bottom:25px; } .empty-state>span { display:block; font-size:24px; letter-spacing:-.6px; } .empty-state p { font-size:13px; color:#a5b297; line-height:1.8; margin:13px 0 24px; } .empty-state button { display:flex; align-items:center; justify-content:space-between; gap:30px; padding:12px; background:#c0cbb2; border:0; color:#252d1e; font-size:12px; }
   .skeleton-list { display:grid; gap:14px; padding:16px 10px; } .skeleton-list i { height:64px; background:linear-gradient(100deg,#ffffff03,#ffffff08,#ffffff03); background-size:200% 100%; animation:shimmer 1.6s infinite; }
-  .map-tools { pointer-events:auto; position:absolute; right:24px; bottom:95px; display:flex; flex-direction:column; padding:4px; background:#171a19f5; border:1px solid var(--edge); border-radius:3px; }
-  .map-tools button { display:grid; place-items:center; width:39px; height:39px; padding:0; background:none; border:0; color:#dbe2d1; font-size:22px; } .map-tools button:hover { background:#b8c5a614; } .map-tools>span { height:1px; margin:3px 6px; background:var(--edge); }
-  .map-note { position:absolute; bottom:25px; right:24px; display:flex; flex-wrap:wrap; gap:6px 12px; font-size:9px; pointer-events:auto; color:#c1c8b8; padding:5px 8px; background:#171a19a8; } .map-note a { color:inherit; text-decoration:none; }
-  .view-coordinates { position:absolute; left:24px; bottom:35px; display:flex; align-items:center; gap:12px; padding:11px 14px; border-left:1px solid #b7c6a74a; background:#171a19ed; color:#b9c5ac; font-size:10px; letter-spacing:.8px; font-variant-numeric:tabular-nums; } .crosshair { font-size:22px; font-weight:400; line-height:1; color:#e4e8dc; } .view-mode { padding-left:15px; border-left:1px solid #b7c6a72c; font-size:9px; }
+
   .map-tooltip { pointer-events:none; position:absolute; width:218px; padding:15px 17px; border:1px solid #b8c7aa40; background:#171a19fa; border-radius:3px; box-shadow:0 10px 30px #0004; animation:row-in .2s both; } .map-tooltip>span { display:block; text-transform:uppercase; letter-spacing:1px; font-size:9px; color:#aebda0; } .map-tooltip strong { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; font-size:14px; line-height:1.4; font-weight:500; margin:9px 0; } .map-tooltip small { font-size:10px; color:#99aa8b; }
   .mobile-trigger { display:none; }
   @keyframes interface-in { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
   @keyframes title-in { from { opacity:0; transform:translateY(20px); clip-path:inset(0 0 100% 0); } to { opacity:1; transform:translateY(0); clip-path:inset(0); } }
   @keyframes row-in { from { opacity:0; transform:translateY(9px); } to { opacity:1; transform:translateY(0); } }
   @keyframes shimmer { to { background-position:-200% 0; } }
-  @media(min-width:701px) and (max-width:1120px) { .city-time { display:none; } }
-  @media(max-height:760px) and (min-width:701px) { .intro { padding:19px 25px; } .intro h1 { font-size:31px; margin:15px 0 10px; } .intro p { display:none; } .search-box { margin-top:12px; margin-bottom:10px; } .explorer { top:99px; bottom:79px; } }
-  @media(max-height:560px) and (min-width:701px) { .intro { display:none; } .explorer { top:86px; bottom:65px; } .identity { top:14px; } .desktop-trigger { top:24px; } .city-time { top:28px; } .view-coordinates { bottom:16px; } }
+
+  @media(max-height:760px) and (min-width:701px) { .intro { padding:19px 25px; } .intro h1 { font-size:31px; margin:15px 0 10px; } .intro p { display:none; } .search-box { margin-top:12px; margin-bottom:10px; } .explorer { top:99px; bottom:24px; } }
+  @media(max-height:560px) and (min-width:701px) { .intro { display:none; } .explorer { top:86px; bottom:14px; } .identity { top:14px; } .desktop-trigger { top:24px; }   }
   @media(max-width:700px) {
-    .identity { top:17px; left:16px; padding:8px 10px; gap:8px; } .brand-mark { width:27px; height:30px; } .identity strong { font-size:18px; letter-spacing:-.7px; } .identity p { font-size:6px; letter-spacing:1px; } .city-time,.desktop-trigger,.intro,.view-coordinates,.map-note { display:none; }
+    .desktop-trigger,.intro { display:none; }
+    .identity { top:17px; left:16px; padding:8px 10px; gap:8px; } .brand-mark { width:27px; height:30px; } .identity strong { font-size:18px; letter-spacing:-.7px; } .identity p { font-size:6px; letter-spacing:1px; }
     .explorer { top:auto; left:12px; bottom:91px; width:calc(100% - 24px); max-height:calc(100dvh - 190px); min-height:45dvh; background:#171a19fc; border-radius:8px; transform:translateY(35px); opacity:0; visibility:hidden; pointer-events:none; animation:none; transition:transform .55s cubic-bezier(.16,1,.3,1),opacity .25s,visibility .4s; }
     .explorer.mobile-open { opacity:1; transform:translateY(0); visibility:visible; pointer-events:auto; }
     .explorer::before { content:''; width:30px; height:3px; background:#b5c4a546; border-radius:3px; margin:10px auto 0; flex-shrink:0; } .search-box { margin:7px 22px 4px; padding:12px 0; } .search-box kbd { display:none; } .tabs { margin:0 20px; } .tabs button { padding:15px 0; }
     .panel-content { max-height:46dvh; padding-top:0; } .category-nav { margin-top:15px; } .layer-guidance { margin-bottom:16px; } .layer-row { padding:14px 10px; } footer { padding:13px 20px; }
     .category-nav button { min-height:44px; } .filter-chips button { min-height:40px; }
-    .mobile-trigger { position:absolute; pointer-events:auto; display:flex; justify-content:space-between; align-items:center; left:16px; right:72px; bottom:31px; padding:17px 19px; border:1px solid #c3ceb450; border-radius:3px; background:#1a2118fa; color:#e4ebdb; font-size:13px; box-shadow:0 4px 24px #0003; }
-    .mobile-trigger>span { font-size:11px; color:#afbd9e; } .map-tools { bottom:95px; right:16px; } .map-tools.mobile-covered { display:none; } .map-tools button { width:35px; height:36px; } .map-tooltip { display:none; }
+    .mobile-trigger { position:absolute; pointer-events:auto; display:flex; justify-content:space-between; align-items:center; left:16px; right:16px; bottom:31px; padding:17px 19px; border:1px solid #c3ceb450; border-radius:3px; background:#1a2118fa; color:#e4ebdb; font-size:13px; box-shadow:0 4px 24px #0003; }
+    .mobile-trigger>span { font-size:11px; color:#afbd9e; }    .map-tooltip { display:none; }
   }
   @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; } }
 </style>

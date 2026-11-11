@@ -61,7 +61,11 @@
   <div class="preference"><div><strong>Rain radar</strong><small>Latest observed rain · loads on request</small></div><button class="toggle" class:enabled={weatherState?.radarEnabled} role="switch" aria-checked={!!weatherState?.radarEnabled} aria-label="Rain radar" on:click={() => weatherController?.setRadarEnabled(!weatherState?.radarEnabled)}><i></i></button></div>
   {#if weatherState?.radarEnabled && !weatherState?.radarAt}<p class="hint" role="status">A recent radar frame isn’t available yet. We’ll try again automatically.</p>{/if}
   <div class="map-guidance"><span class="guidance-icon"><ExplorerIcon name="compass" size={25}/></span><div><strong>A change of angle.</strong><p>Scroll to zoom. Drag to move. Hold Ctrl and drag to tilt and turn the map.</p></div></div>
-  <p class="attribution">Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> · <a href="https://openfreemap.org/" target="_blank" rel="noreferrer">OpenFreeMap</a><br/>Aerial imagery: <a href="https://www.pdok.nl/" target="_blank" rel="noreferrer">PDOK</a></p>
+  <section class="attribution" aria-label="Map credits">
+    <h3>Map credits</h3>
+    <p>Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a> · <a href="https://openfreemap.org/" target="_blank" rel="noopener noreferrer">OpenFreeMap</a></p>
+    <p>Aerial imagery, 2026: <a href="https://www.beeldmateriaal.nl/" target="_blank" rel="noopener noreferrer">Samenwerkingsverband Beeldmateriaal</a> / <a href="https://www.pdok.nl/" target="_blank" rel="noopener noreferrer">PDOK</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a> (water blended).</p>
+  </section>
 </div>
 <style>
   .appearance { padding:25px 5px 9px; }
@@ -127,7 +131,9 @@
   .map-guidance strong { font-size:12px; font-weight:450; color:#e0e5d8; }
   .map-guidance p { font-size:11px; margin:7px 0 0; }
   .hint { font-size:11px; border-left:2px solid #bdaf8e; padding-left:12px; margin:7px 0 15px; }
-  .attribution { font-size:10px; margin:21px 0 0; color:#8c9980; line-height:1.8; }
+  .attribution { margin:21px 0 0; color:#a1af94; }
+  .attribution h3 { margin:0 0 10px; font-size:11px; font-weight:500; color:#c1cdb5; }
+  .attribution p { margin:8px 0 0; font-size:11px; color:inherit; line-height:1.8; }
   .attribution a { color:inherit; text-underline-offset:3px; }
   button:focus-visible,a:focus-visible { outline:2px solid #d4dfc7; outline-offset:3px; }
   @keyframes rotate-status { to { transform:rotate(360deg); } }

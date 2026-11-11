@@ -49,9 +49,14 @@ verification. No claim of measured forecast accuracy is made by this implementat
 
 The full session explanation, cache/status contract, renderer details, validation
 results and remaining limitations are recorded in the root
-`rotterdam_live_api_architecture.txt` (architecture revision 2.6.0, updated
+`rotterdam_live_api_architecture.txt` (architecture revision 2.6.1, updated
 10 November with custom SVG map symbols, frontend polish and same-origin built
 preview/API routing). The existing cloud renderer remains enabled on Aerial;
 source freshness and model limitations are unchanged. Work is carried
 on `malidev`, including the earlier feature-branch history. Production remains
 unchanged by this development work.
+
+The annotated UI follow-up moved the Rotterdam date/time into the weather card.
+Its main button now collapses the whole card to a compact view and expands it
+again, independently of cloud rendering. Bottom overlays and zoom/reset controls
+were removed; map credits remain inside Map settings.
