@@ -11,7 +11,11 @@ const dependencies = await readiness.json();
 assert.equal(dependencies.database?.connected, true, 'Database is unavailable');
 assert.equal(dependencies.redis?.connected, true, 'Redis is unavailable');
 
-globalThis.fetch = (url, options) => nativeFetch(new URL(url, baseURL), options);
+globalThis.fetch = (url, options) => {
+  // Node's controller defaults to localhost; mirror the browser's serving origin.
+  const requested = new URL(url, baseURL);
+  return nativeFetch(new URL(requested.pathname + requested.search, baseURL), options);
+};
 // The smoke check needs one real fetch, without the UI's recurring poll timer.
 const nativeInterval = globalThis.setInterval;
 let controller;
