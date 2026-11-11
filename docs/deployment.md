@@ -34,5 +34,7 @@ journalctl --user -u rotterdam-deploy.service -n 100
 
 The last successful revision is recorded in the private state directory's
 `deployed.json`. The public version endpoint identifies the deployed source commit.
-Previous image tags and Docker build caches are retained; monitor available disk
-space and prune old unused images periodically while retaining rollback images.
+The current image, rollback tag and two previous release tags are retained.
+Intermediate builder tags and older release tags are removed after success. Docker
+build caches remain available; monitor available disk space and prune old caches
+periodically while retaining rollback images.

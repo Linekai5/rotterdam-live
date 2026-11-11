@@ -93,8 +93,20 @@ def main():
         pending.write_text(json.dumps({'sha': sha, 'image': image, 'previous_image': previous}) + '\n')
         pending.replace(deployed)
         print('Deployed and verified', sha, flush=True)
-    # Build caches remain available; remove unneeded intermediate image tags.
-    run('docker', 'image', 'rm', f'{image}-builder')
+    # Bound this application's retained images without pruning other services.
+    # Cleanup failure must not turn a verified release into a failed deployment.
+    try:
+        tags = output('docker', 'image', 'ls', 'rotterdam_live_web', '--format', '{{.Tag}}').splitlines()
+        older = 0
+        for tag in tags:
+            if re.fullmatch('[0-9a-f]{40}-builder', tag):
+                run('docker', 'image', 'rm', f'rotterdam_live_web:{tag}')
+            elif re.fullmatch('[0-9a-f]{40}', tag) and tag != sha:
+                older += 1
+                if older > 2:
+                    run('docker', 'image', 'rm', f'rotterdam_live_web:{tag}')
+    except subprocess.CalledProcessError as error:
+        print('Release is live; image cleanup needs attention:', error, flush=True)
 
 
 if __name__ == '__main__':
