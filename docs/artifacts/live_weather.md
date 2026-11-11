@@ -37,7 +37,7 @@ The system reduced-motion preference freezes idle cloud advection. Explorer
 overlays draw above the atmosphere; guarded custom-layer ordering prevents
 recursive MapLibre style changes.
 
-Local development uses Vite's API/health proxy to avoid localhost/127.0.0.1 CORS
+Local development uses Vite's API/health proxy to avoid localhost/localhost CORS
 mismatches. The local worker must restart when ingestion code changes. Production
 must deploy backend, worker and frontend together; the older public API cannot
 satisfy the new controller's required schema. This change was not deployed publicly.

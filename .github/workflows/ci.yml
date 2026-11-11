@@ -15,11 +15,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  public-tree:
+    name: Public Repository Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Check Tracked Files
+        run: python3 scripts/check-public-tree.py
+
+      - name: Test Publication Checks
+        run: python3 -m unittest discover -s scripts/tests
+
   changes:
     name: Path Filtering
     runs-on: ubuntu-latest
     outputs:
-      api: ${{ steps.filter.outputs.api }}
       web: ${{ steps.filter.outputs.web }}
       nginx: ${{ steps.filter.outputs.nginx }}
     steps:
@@ -31,97 +43,12 @@ jobs:
         uses: dorny/paths-filter@v3
         with:
           filters: |
-            api:
-              - 'api/**'
-              - '.github/workflows/ci.yml'
             web:
               - 'web/**'
               - '.github/workflows/ci.yml'
             nginx:
               - 'nginx/**'
-              - 'docker-compose*.yml'
               - '.github/workflows/ci.yml'
-
-  test-api:
-    name: Backend API Tests (PostGIS + Redis)
-    needs: changes
-    if: ${{ needs.changes.outputs.api == 'true' || github.event_name == 'push' }}
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgis/postgis:16-3.4
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: rotterdamlive_secret_2026
-          POSTGRES_DB: rotterdamlive
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
-
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
-
-    defaults:
-      run:
-        working-directory: api
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-          cache-dependency-path: 'api/requirements.txt'
-
-      - name: Install System Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libpq-dev libexpat1 postgresql-client
-
-      - name: Install Python Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run Database Initialization & Seed Fixtures
-        env:
-          PYTHONPATH: .
-          DATABASE_URL: postgresql+asyncpg://postgres:rotterdamlive_secret_2026@127.0.0.1:5432/rotterdamlive
-          DATABASE_URL_SYNC: postgresql://postgres:rotterdamlive_secret_2026@127.0.0.1:5432/rotterdamlive
-          REDIS_URL: redis://127.0.0.1:6379/0
-          ENVIRONMENT: testing
-        run: |
-          python scripts/init_db.py
-          if [ -f tests/fixtures/ci_seed.sql.gz ]; then
-            echo "Clearing placeholder baseline rows before loading high-fidelity seed dataset..."
-            PGPASSWORD=rotterdamlive_secret_2026 psql -h 127.0.0.1 -U postgres -d rotterdamlive -c "TRUNCATE TABLE district_demographics, district_housing_metrics, rotterdam_districts CASCADE;"
-            echo "Loading CI test seed dataset..."
-            gunzip -c tests/fixtures/ci_seed.sql.gz | PGPASSWORD=rotterdamlive_secret_2026 psql -h 127.0.0.1 -U postgres -d rotterdamlive
-          fi
-
-      - name: Execute Pytest Suite (Sub-30ms SLA Verification)
-        env:
-          PYTHONPATH: .
-          DATABASE_URL: postgresql+asyncpg://postgres:rotterdamlive_secret_2026@127.0.0.1:5432/rotterdamlive
-          DATABASE_URL_SYNC: postgresql://postgres:rotterdamlive_secret_2026@127.0.0.1:5432/rotterdamlive
-          REDIS_URL: redis://127.0.0.1:6379/0
-          ENVIRONMENT: testing
-        run: |
-          pytest -v --durations=10
 
   test-web:
     name: Frontend Web Suite (Svelte + Vite)

@@ -13,7 +13,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rotterdamlive_secret_2026}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the private root .env}
       POSTGRES_DB: ${POSTGRES_DB:-rotterdamlive}
     volumes:
       - dev_pgdata:/var/lib/postgresql/data
@@ -57,8 +57,8 @@ services:
     environment:
       PYTHONPATH: /app
       PYTHONUNBUFFERED: "1"
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-rotterdamlive_secret_2026}@db:5432/${POSTGRES_DB:-rotterdamlive}
-      DATABASE_URL_SYNC: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-rotterdamlive_secret_2026}@db:5432/${POSTGRES_DB:-rotterdamlive}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the private root .env}@db:5432/${POSTGRES_DB:-rotterdamlive}
+      DATABASE_URL_SYNC: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the private root .env}@db:5432/${POSTGRES_DB:-rotterdamlive}
       REDIS_URL: redis://redis:6379/0
     volumes:
       - ./api:/app
@@ -93,8 +93,8 @@ services:
     environment:
       PYTHONPATH: /app
       PYTHONUNBUFFERED: "1"
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-rotterdamlive_secret_2026}@db:5432/${POSTGRES_DB:-rotterdamlive}
-      DATABASE_URL_SYNC: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-rotterdamlive_secret_2026}@db:5432/${POSTGRES_DB:-rotterdamlive}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the private root .env}@db:5432/${POSTGRES_DB:-rotterdamlive}
+      DATABASE_URL_SYNC: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the private root .env}@db:5432/${POSTGRES_DB:-rotterdamlive}
       REDIS_URL: redis://redis:6379/0
     volumes:
       - ./api:/app

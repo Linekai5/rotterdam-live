@@ -2,7 +2,7 @@
 
 ## 1. Project Context & Production Architecture
 * **Platform:** Rotterdam Live (`rotterdam-live`) — Real-time situational & geospatial platform for the Municipality of Rotterdam (`0599`).
-* **Production Host:** Hetzner Cloud Linux VPS (`46.224.227.187` / Tailscale `100.70.237.40`, SSH port 2299).
+* **Production Host:** Hetzner Cloud Linux VPS (`${PUBLIC_BIND_ADDRESS}` / Tailscale `${PRIVATE_BIND_ADDRESS}`, SSH port 2299).
 * **Stack:**
   - **Reverse Proxy:** `rotterdam_live_nginx` (Public HTTPS: `rotterdamlive.nl`, Private Tailscale: `api.rotterdamlive.nl` over HTTP).
   - **Backend API:** `rotterdam_live_api` (FastAPI / Uvicorn, port 8000).
@@ -11,7 +11,7 @@
   - **Spatial Database:** `rotterdam_live_db` (PostgreSQL 16 + PostGIS 3.4, persistent volume `rotterdam_live_pgdata`).
   - **Cache Layer:** `rotterdam_live_redis` (Redis 7 Alpine, sub-5ms SLA, persistent volume `rotterdam_live_redisdata`).
   - **SSL Renewal:** `rotterdam_live_certbot` (Let's Encrypt automated HTTP-01 renewal loop).
-  - **CI/CD:** Native self-hosted GitHub Actions runner (`hetzner-vps`, PM2 id: 0). Automatically tests PRs and deploys merges to `main` in ~45 seconds.
+  - **CI/CD:** GitHub-hosted public-tree, frontend and Nginx checks. Backend source and deployment automation are supplied privately; no automatic deployment workflow is tracked.
 
 ## 2. Global Artifacts System Across All Sessions
 All master architecture artifacts, operational runbooks, and design specifications are stored globally and persistent across all sessions:
@@ -24,3 +24,6 @@ All master architecture artifacts, operational runbooks, and design specificatio
 ## 3. Key Invariants
 1. **Sub-30ms GeoJSON SLA:** Never run spatial computations, external API calls, or LineString operations inside client HTTP requests. Rely on Redis caches and PostGIS GiST indexes.
 2. **Strict Network Isolation:** Serve `rotterdamlive.nl` over public HTTPS with genuine Let's Encrypt TLS. Keep `api.rotterdamlive.nl` private over Tailscale HTTP with `Strict-Transport-Security: max-age=0`.
+
+## 4. Public Source Boundary
+The entire `api/` directory and machine-specific automation are ignored and untracked. Preserve local copies. Do not force-add private files or restore production addresses to documentation. Existing history remains private until a clean publication strategy is completed; see `docs/publication.md`.

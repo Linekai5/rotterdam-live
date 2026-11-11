@@ -1,6 +1,0 @@
-# Native Multi-Arch PostgreSQL 16 + PostGIS 3.4
-FROM postgres:16-bookworm
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    postgresql-16-postgis-3 \
-    && rm -rf /var/lib/apt/lists/*
