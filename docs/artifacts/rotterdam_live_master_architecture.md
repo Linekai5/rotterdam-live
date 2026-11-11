@@ -1,7 +1,7 @@
 # Rotterdam Live Platform — Master Architectural Specification & Operational Status
 
 > [!NOTE]
-> **Architecture Revision:** 2.6.0 — 10 November 2026 (Frontend Design Review, Bespoke SVG Map Symbols, Functional Filter Audit & Source-Backed Camera Directory; application package versions are unchanged)
+> **Architecture Revision:** 2.6.1 — 10 November 2026 (Annotated UI Cleanup, Collapsible Weather Dashboard & Relocated Map Credits; application package versions are unchanged)
 > **Environment:** Hetzner Cloud Linux VPS (`${PUBLIC_BIND_ADDRESS}` / Tailscale `${PRIVATE_BIND_ADDRESS}`)
 > **Unified Repository:** [`github.com/Linekai5/rotterdam-live`](https://github.com/Linekai5/rotterdam-live) (`malidev` development branch; `main` is the deployment branch)
 > **Interactive Documentation:** `https://rotterdamlive.nl/docs` | `https://rotterdamlive.nl/redoc`
@@ -576,7 +576,7 @@ Each enabled layer has loading, ready, stale or error state, with retry and last
 
 A district's `/living/districts/{name}/passport` is fetched only after the profile button is pressed, with a 12-second timeout and cancellation. Annual population/housing figures show their year and are labelled separately from live data. Out-of-bounds regional records can still show details; the UI does not promise a map focus outside the supported map extent.
 
-Buttons, switches and filters have accessible names and visible keyboard focus. Hidden explorer panels are inert. Mobile details return to the result list; opening the explorer dismisses the location sheet. Native map attribution remains available without covering mobile navigation. `MapAppearance.svelte` controls base maps, labels, building heights, cloud atmosphere and optional radar. Operating-system reduced motion also stops continuous cloud advection. No supervisor UI, inference request or AI endpoint was introduced.
+Buttons, switches and filters have accessible names and visible keyboard focus. Hidden explorer panels are inert. Mobile details return to the result list; opening the explorer dismisses the location sheet. Map source credits are available in the Map settings section; the native bottom attribution overlay is disabled. `MapAppearance.svelte` controls base maps, labels, building heights, cloud atmosphere and optional radar. Operating-system reduced motion also stops continuous cloud advection. No supervisor UI, inference request or AI endpoint was introduced.
 
 ### 13.4 Practical Limits and Delivery
 
@@ -617,3 +617,11 @@ MapLibre 2.x receives locally rasterized 2× sprites from these SVGs. Only glyph
 The route-by-route live audit, geometry types, source outage and repair evidence are recorded in `docs/artifacts/map_feed_audit.md`. All 13 map routes returned populated GeoJSON locally. Empty results for a particular time window, category or viewport are explained separately from a failed request. Optional layers still make no requests at startup, and radar remains opt-in. Checks cover software behaviour and source integrity; they do not certify that upstream sensors, mapped cameras or model estimates match physical conditions at every instant.
 
 Final automated check results are recorded in the frontend review artifact. Changes are committed to `malidev`; this review does not deploy `main` or production. The local Docker web image was rebuilt on port 8080. Both that built preview and Vite on port 5173 talk to FastAPI on port 8000 through their same-origin proxy.
+
+### 14.5 Annotated UI Cleanup — 10 November 2026
+
+The user-marked `web/screenshots/image.png` identifies the separate date/time strip, bottom coordinates/view badge, duplicated bottom map credits and zoom/reset stack for removal. These overlays and their unused handlers/styles were removed. The desktop explorer uses the freed bottom space, and its mobile trigger no longer reserves space for the removed controls. MapLibre still supports normal mouse, touch and keyboard navigation.
+
+The weather dashboard now contains the current Rotterdam date/time, separate from the weather model's valid time. Its main button toggles between the full dashboard and a compact temperature/status view, with smooth motion and `aria-expanded` state. Desktop starts expanded and mobile starts compact. Collapsing the dashboard does not disable cloud rendering or stop live weather updates. The clock respects Europe/Amsterdam, including CET/CEST.
+
+Map credits and provider/license links remain available under Map settings. Source attribution metadata is retained; there is no bottom credit bar, duplicated copyright overlay, or new floating credit button. The imagery regression checks the metadata and new credit location. Weather interaction checks verify repeated collapse/expand, keyboard access, small-screen layout and preservation of the live-only controller.

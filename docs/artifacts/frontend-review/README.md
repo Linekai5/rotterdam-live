@@ -38,3 +38,13 @@ These captures use real API data. Weather, event listings, the viewport and sour
 The built-preview test is explicitly skipped if `WEB_PREVIEW_ORIGIN` is unset, since it requires the Docker web/API stack. Existing backend passport assertions now compare exact response values with their database source rows, rather than a frozen housing count that ingestion legitimately changes.
 
 The current camera source supplies mapped locations, not verified public video. Its Overpass refresh timed out during review and retained prior sourced records. Other feeds may return empty results for a time window, filter or viewport; a successful refresh does not independently verify physical conditions. Rendering speed still depends on device, tiles and weather load; no universal frame-rate guarantee is claimed.
+
+## Annotated UI follow-up
+
+The marked reference is `web/screenshots/image.png`. Removed the bottom coordinates/view badge, both bottom credit overlays, the separate date/time strip and the plus/minus/reset stack. Map source/provider credits now live in Map settings. The sidebar uses the freed desktop space, and the mobile explorer button spans the available width.
+
+The weather dashboard shows the current Rotterdam date and time above the model's valid time. Click the main button to collapse it to temperature, status and time. Click again to expand it. Desktop starts expanded and mobile starts compact. The button supports keyboard activation and reduced motion. The weather controller polls independently of the dashboard.
+
+[Expanded weather and cleaned map](weather-expanded.jpg) · [Collapsed weather](weather-compact.jpg) · [Mobile](weather-mobile.jpg)
+
+Verified on 11 November with 14 unit tests, 25 browser tests and the Vite and Docker builds. The browser checks include both dashboard sizes, keyboard activation and the Map settings credits.

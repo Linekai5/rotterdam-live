@@ -1,6 +1,6 @@
 # Rotterdam Live — City Explorer & Live Weather Architecture
 
-Architecture revision 2.6.0 · 10 November 2026 · Development branch: `malidev`
+Architecture revision 2.6.1 · 10 November 2026 · Development branch: `malidev`
 
 This public overview describes the current development implementation. The session
 changes have not been deployed to production. The full repository specification is
@@ -100,7 +100,11 @@ stop while stale; prior values can remain visible with their original time.
 The muted charcoal card consistently shows Rotterdam Centrum model values:
 temperature, weather description, wind speed/direction, cloud cover and rain rate.
 It shows Live / Outdated / Unavailable, a Rotterdam-local valid time, source details,
-manual refresh and radar attribution. There are no presets or simulator controls.
+manual refresh and radar attribution. Current Rotterdam date/time lives inside
+the dashboard, separately from the model valid time. Clicking its main button
+collapses the dashboard into a compact temperature/status view; clicking again
+expands it. Desktop starts expanded and mobile starts compact. Collapsing it does
+not disable clouds or polling. There are no presets or simulator controls.
 
 Observed rain uses a separate raster layer. Radar frames older than 20 minutes or
 more than five minutes in the future are removed. Source zoom is capped at 7;
@@ -131,8 +135,9 @@ calibrated probabilities. Cloud cover percentage is not a map opacity target.
 Cloud shape and position remain procedural, without a satellite mask.
 
 Rain radar starts off and loads metadata/tiles only after it is enabled in Map.
-Its switch is independent of cloud atmosphere. Native map credits remain visible
-or available through the attribution control, including on small screens.
+Its switch is independent of cloud atmosphere. Map credits and provider/license links are available
+inside Map settings. Bottom credit overlays, coordinates and zoom/reset controls
+have been removed following the annotated UI review.
 The original volumetric clouds remain enabled by default on Aerial and across
 map-style changes. Zero model cloud cover gives a clear sky; the map does not add
 decorative clouds over a clear live-model snapshot.

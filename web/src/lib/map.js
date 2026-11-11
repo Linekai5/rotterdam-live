@@ -134,7 +134,8 @@ export async function initMap(mapElement, onReady) {
     maxPitch: 65,
     antialias: true,
     renderWorldCopies: false,
-    attributionControl: { compact: true },
+    // Source credits are available in the explorer's Map settings.
+    attributionControl: false,
     maxTileCacheSize: 500,
     fadeDuration: 0,
     transformRequest: (url, resourceType) => {
@@ -159,19 +160,6 @@ export async function initMap(mapElement, onReady) {
       return { url };
     }
   });
-
-  // MapLibre 2.x initially expands compact attribution. Collapse it once so
-  // mobile navigation is not covered; the native disclosure stays available.
-  function prepareAttribution() {
-    const control = map.getContainer().querySelector('.maplibregl-ctrl-attrib');
-    if (control?.classList.contains('maplibregl-compact-show')) {
-      control.querySelector('summary')?.click();
-      map.off('data', prepareAttribution);
-    }
-  }
-  map.on('data', prepareAttribution);
-  map.once('remove', () => map.off('data', prepareAttribution));
-  prepareAttribution();
 
   if (typeof window !== 'undefined') window.map = map;
 

@@ -99,7 +99,7 @@ test('style switching, detail toggles and context restoration', async ({page}) =
   expect(errors).toEqual([]);
 });
 
-test('fixed-year PDOK imagery uses its finest tiles and exposes attribution', async ({page}) => {
+test('fixed-year PDOK imagery uses its finest tiles and keeps credits in Map settings', async ({page}) => {
   const tileRequests = [];
   page.on('request', request => {
     if (request.url().includes('/luchtfotorgb/')) tileRequests.push(request.url());
@@ -111,11 +111,16 @@ test('fixed-year PDOK imagery uses its finest tiles and exposes attribution', as
   expect(tileRequests.length).toBeGreaterThan(0);
   expect(tileRequests.every(url => url.includes('/2026_orthoHR/'))).toBeTruthy();
   expect(tileRequests.some(url => url.includes('GoogleMapsCompatible/21/'))).toBeTruthy();
-  await expect(page.locator('.maplibregl-ctrl-attrib-inner')).toContainText('Samenwerkingsverband Beeldmateriaal');
-  await expect(page.locator('.maplibregl-ctrl-attrib-inner a[href="https://creativecommons.org/licenses/by/4.0/"]')).toHaveText('CC BY 4.0');
-  await page.evaluate(async () => {
-    const { switchStyle } = await import('/src/lib/map.js');
-    switchStyle(map, 'dark');
-  });
-  await expect(page.locator('.maplibregl-ctrl-attrib-inner')).not.toContainText('Luchtfoto 2026');
+  expect(await page.evaluate(() => map.getStyle().sources.satellite.attribution)).toContain('Samenwerkingsverband Beeldmateriaal');
+  await expect(page.locator('.maplibregl-ctrl-attrib')).toHaveCount(0);
+  await page.addStyleTag({ content: '.city-shell {display:block!important}' });
+  await page.getByRole('button', { name: 'Map', exact: true }).click();
+  const credits = page.getByRole('region', { name: 'Map credits' });
+  await credits.scrollIntoViewIfNeeded();
+  await expect(credits).toContainText('Samenwerkingsverband Beeldmateriaal');
+  await expect(credits.getByRole('link', { name: 'OpenStreetMap contributors', exact: true })).toHaveAttribute('href', 'https://www.openstreetmap.org/copyright');
+  await expect(credits.getByRole('link', { name: 'CC BY 4.0', exact: true })).toHaveAttribute('href', 'https://creativecommons.org/licenses/by/4.0/');
+  await page.getByRole('button', { name: 'Night', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => !!map.getStyle().sources.satellite)).toBe(false);
+  await expect(page.locator('.maplibregl-ctrl-attrib')).toHaveCount(0);
 });
