@@ -13,7 +13,62 @@ const weatherSnapshot = () => ({
     weather_code: 45, weather_description: 'Mist' }))
 });
 
-const mockWeather = page => page.route('**/api/v1/weather/live', route => route.fulfill({ json: weatherSnapshot() }));
+const mockWeather = page => page.route('**/api/v1/weather/grid', route => route.fulfill({ json: weatherSnapshot() }));
+
+test('current model clouds survive missing station observations and repeated reloads', async ({ page }) => {
+  let modelStatus = 'fresh';
+  let oldModel = false;
+  let modelRequests = 0;
+  let stationRequests = 0;
+  const snapshot = () => ({ ...weatherSnapshot(), data_status: modelStatus,
+    grid_nodes: weatherSnapshot().grid_nodes.map(n => ({ ...n, cloud_cover: 100,
+      cloud_cover_low: 100, cloud_cover_mid: 100, cloud_cover_high: 0,
+      timestamp: new Date(Date.now() - (oldModel ? 31 * 60000 : 0)).toISOString() })) });
+  await page.route('**/api/v1/weather/live', route => {
+    stationRequests++;
+    return route.fulfill({ json: { ...snapshot(), data_status: 'stale', station_status: 'unavailable', model_status: 'fresh' } });
+  });
+  await page.route('**/api/v1/weather/grid', route => {
+    modelRequests++;
+    return route.fulfill({ json: snapshot() });
+  });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await openMap(page, '/');
+    const dashboard = page.getByRole('button', { name: 'Rotterdam weather details' });
+    await expect(dashboard).toContainText('100%');
+    await expect(dashboard).toContainText('Live');
+    await page.waitForFunction(() => window.weatherController?.isEnabled() &&
+      map.getLayer('rotterdam-volumetric-weather')?.implementation.lastFboRenderMs > 0);
+    const coverage = await page.evaluate(() => {
+      const layer = map.getLayer('rotterdam-volumetric-weather').implementation;
+      const gl = map.painter.context.gl;
+      const previous = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, layer.fbo);
+      const pixels = new Uint8Array(layer.fboWidth * layer.fboHeight * 4);
+      gl.readPixels(0, 0, layer.fboWidth, layer.fboHeight, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, previous);
+      let visible = 0;
+      for (let i = 3; i < pixels.length; i += 4) if (pixels[i] > 25) visible++;
+      return visible / (pixels.length / 4);
+    });
+    expect(coverage).toBeGreaterThan(0.2);
+  }
+  modelStatus = 'stale';
+  await page.evaluate(() => weatherController.refreshLive());
+  expect(await page.evaluate(() => weatherController.isEnabled())).toBe(true);
+  await expect(page.getByRole('button', { name: 'Rotterdam weather details' })).toContainText('Refresh delayed');
+  await page.getByText('Source & weather notes').click();
+  await expect(page.getByText('Weather refresh is delayed. Showing the latest model while it remains current.', { exact: true })).toBeVisible();
+  modelStatus = 'fresh'; oldModel = true;
+  await page.evaluate(() => weatherController.refreshLive());
+  expect(await page.evaluate(() => weatherController.isEnabled())).toBe(false);
+  await expect(page.getByRole('button', { name: 'Rotterdam weather details' })).toContainText('Outdated');
+  oldModel = false;
+  await page.evaluate(() => weatherController.refreshLive());
+  expect(await page.evaluate(() => weatherController.isEnabled())).toBe(true);
+  expect(stationRequests).toBe(0);
+  expect(modelRequests).toBeGreaterThanOrEqual(6);
+});
 
 test('clouds keep covering the water after data layers, selections and style changes', async ({ page }) => {
   const errors = [];

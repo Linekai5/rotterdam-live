@@ -9,7 +9,8 @@
  *
  * Observed rain is a separate RainViewer raster layer with frame-age checks.
  * No runtime weather presets, synthetic initial weather, or random lightning.
- * Model effects require fresh accepted data. Reduced-resolution rendering and
+ * Model effects require validated, unexpired data; refresh delays remain visible.
+ * Reduced-resolution rendering and
  * a 33ms idle repaint timer limit cost; frame rate depends on the device.
  * See rotterdam_live_api_architecture.txt for contracts and known limitations.
  */
@@ -1050,12 +1051,16 @@ export function createWeatherEngineController(map, onStateChange = null) {
     const timestamps = nodes.map(n => Date.parse(n.timestamp)).filter(Number.isFinite);
     const validAt = timestamps.length === 12 ? Math.min(...timestamps) : NaN;
     const ageSeconds = (Date.now() - validAt) / 1000;
+    const hasCurrentModel = nodes.length === 12 && Number.isFinite(ageSeconds) && ageSeconds <= 1800 && ageSeconds >= -300;
+    const refreshDelayed = hasCurrentModel && (requestFailed || livePayload?.data_status !== 'fresh');
     const status = !nodes.length ? 'unavailable'
-      : requestFailed || livePayload?.data_status !== 'fresh' || !Number.isFinite(ageSeconds) || ageSeconds > 1800 || ageSeconds < -300 ? 'stale' : 'live';
+      : !hasCurrentModel || refreshDelayed ? 'stale' : 'live';
     const zoom = map ? map.getZoom() : 11.5;
     const altitude = computeAltitudeCloudFade(zoom);
     return {
       status,
+      hasCurrentModel,
+      refreshDelayed,
       radarEnabled,
       radarAt: radarEnabled && radarAt && Date.now() - Date.parse(radarAt) <= 1200000 ? radarAt : null,
       isLive: status === 'live',
@@ -1089,7 +1094,9 @@ export function createWeatherEngineController(map, onStateChange = null) {
     const abort = new AbortController();
     const timeout = setTimeout(() => abort.abort(), 15000);
     try {
-      const res = await fetch(`${WEATHER_API_BASE_URL}/api/v1/weather/live`, {
+      // Cloud conditions come from the model grid. The combined /live status
+      // can be stale solely because a separate station observation is missing.
+      const res = await fetch(`${WEATHER_API_BASE_URL}/api/v1/weather/grid`, {
         headers: { Accept: 'application/json' }, cache: 'no-store', signal: abort.signal
       });
       if (!res.ok) throw new Error('Weather unavailable');
@@ -1132,7 +1139,7 @@ export function createWeatherEngineController(map, onStateChange = null) {
     getActiveNodes: () => activeNodes,
     getActiveSolar: () => activeSolar,
     isEnabled: () => enabled && (!map || Boolean(map.getSource('satellite')))
-      && activeNodes.length === 12 && computeSummaryState().status === 'live',
+      && computeSummaryState().hasCurrentModel,
     consumeDirtyFlag: () => {
       const wasDirty = dirty;
       dirty = false;

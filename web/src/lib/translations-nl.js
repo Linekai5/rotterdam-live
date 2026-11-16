@@ -364,6 +364,8 @@ export const dutch = {
   'Rain intensity is a model estimate. The radar overlay shows observed precipitation.': 'De regenintensiteit komt uit het weermodel. De radar toont gemeten neerslag.',
   'These values are outdated. Weather effects resume when fresh data returns.': 'Deze waarden zijn verouderd. De wolkenlaag keert terug zodra er actuele gegevens zijn.',
   'Refresh weather': 'Weer bijwerken',
+  'Refresh delayed': 'Update vertraagd',
+  'Weather refresh is delayed. Showing the latest model while it remains current.': 'De weerupdate is vertraagd. Het laatst ontvangen model blijft zichtbaar zolang het nog actueel is.',
   'The source has not provided a map location for this record.': 'De bron heeft geen kaartlocatie voor dit bericht opgegeven.',
   '{count} records have no reported map location.': '{count} berichten hebben geen opgegeven kaartlocatie.',
   'Location not provided': 'Geen locatie opgegeven',

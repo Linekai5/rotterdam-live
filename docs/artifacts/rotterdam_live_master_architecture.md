@@ -35,6 +35,8 @@ flowchart LR
 
 HTTP handlers serve local snapshots and indexed queries. They do not retrieve upstream weather on a cache miss. Weather and traffic return preserved, explicitly stale data where usable, or an unavailable response when no usable snapshot exists. API startup creates/migrates the schema; provider seeding belongs to the worker.
 
+The model grid refreshes every 120 seconds and remains cached until the oldest node's remaining 30-minute validity expires. A coalesced model job can catch up after host sleep without replaying every missed poll. Refresh delays retain the latest validated, unexpired model and show a “Refresh delayed” status. Invalid responses cannot replace accepted data, and expired or excessively future-dated model data disables the atmosphere. Cache retention never changes the original model timestamps.
+
 The worker coalesces scheduled jobs and prevents overlapping instances of each scheduled job. Initial seeding can run in the background without blocking shutdown; it can be disabled for a controlled restart after sources were already refreshed. Domain cache invalidation preserves weather snapshots, last-good records and source-status keys. Redis pattern deletion uses cursor-based scanning.
 
 Freshness is separate from HTTP success and from the time the browser received a response:
@@ -106,7 +108,7 @@ City Pulse combines a time/day/district prior, event and weather terms, contextu
 - Coincident news keeps a numbered group at street zoom. Clicking it opens its real articles; coordinates are not randomly scattered. Records without usable map locations remain readable without a false marker or camera flight.
 - District fills, outlines and selections stay below the city mask across Aerial, Night and Atlas. Search results outside the central silhouette remain readable without flying to empty water.
 - SVG map glyphs remain distinct by feature type. Layer fades, selection transitions and camera movement respect reduced-motion preferences.
-- Weather illustration appears only on Aerial, fades at street zoom and stays separate from observed rain radar. Data markers remain legible above the illustration. The atmosphere stays above the city mask, river blend and ocean, and below data glyphs and radar. The weather and water installers share the same overlay anchor and use the actual render order for custom layers, including after graphics-context recovery.
+- Weather illustration appears only on Aerial, fades at street zoom and stays separate from observed rain radar. The renderer and model dashboard read `/api/v1/weather/grid` directly; unavailable station observations in the combined `/weather/live` response cannot disable a fresh model grid. Data markers remain legible above the illustration. The atmosphere stays above the city mask, river blend and ocean, and below data glyphs and radar. The weather and water installers share the same overlay anchor and use the actual render order for custom layers, including after graphics-context recovery.
 - MapLibre 6.18 uses its bundled worker explicitly; custom ocean/weather renderers accept its projection-matrix contract. WebGL2 is required; unsupported devices receive an accessible error and recovery control.
 
 ## API families
@@ -134,7 +136,7 @@ CSV category/subcategory filters, district aliases, bounded pagination and bbox 
 
 Local verification includes isolated backend tests, frontend unit/build checks, browser tests, desktop/mobile screenshots, source outage/last-good cases, map bounds and mask ordering, coincident stories, translated/collapsible controls, safe source text/links and a built-preview same-origin check. Backend tests and source staging use a disposable database and a separate Redis logical database, backed by a restore-tested pre-ingestion backup.
 
-Completed checks: 268 backend tests passed, 23 frontend unit tests passed, the production build passed, and all 44 browser checks passed, including the built-preview API connection check. All 72 GET/documentation smoke requests returned HTTP 200. Availability metadata remains part of interpreting those responses. Fifteen additional local activation checks confirmed the complete address snapshot and its search/detail compatibility.
+Completed checks: 268 backend tests passed, 24 frontend unit tests passed, the production build passed, and all 45 browser checks passed, including the built-preview API connection check. All 72 GET/documentation smoke requests returned HTTP 200. Availability metadata remains part of interpreting those responses. Fifteen additional local activation checks confirmed the complete address snapshot and its search/detail compatibility.
 
 Public-tree checks enforce the private-source boundary and reject sensitive tracked material. Production dependency auditing reported no production advisories after the MapLibre upgrade; that is a dependency check, not a claim of complete security.
 

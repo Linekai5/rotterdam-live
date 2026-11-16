@@ -58,7 +58,7 @@
     aria-label={$t('Rotterdam weather details')} title={$t(expanded ? 'Collapse weather dashboard' : 'Expand weather dashboard')}>
     <div class="heading">
       <span class="heading-label">{$t('WEATHER')} <span class="weather-location">/ CENTRUM</span></span>
-      <span class="status"><i></i>{$t(weatherState.status === 'live' ? 'Live' : weatherState.status === 'stale' ? 'Outdated' : 'Unavailable')}<span class:open={expanded} class="chevron">⌄</span></span>
+      <span class="status"><i></i>{$t(weatherState.refreshDelayed ? 'Refresh delayed' : weatherState.status === 'live' ? 'Live' : weatherState.status === 'stale' ? 'Outdated' : 'Unavailable')}<span class:open={expanded} class="chevron">⌄</span></span>
     </div>
     <div class="conditions">
       <span class="temperature">{format(weatherState.temperatureC, decimalNumber)}<small>°</small></span>
@@ -91,7 +91,8 @@
           <div class="detail-row"><span>{$t('Model valid at')}</span><span>{timeLabel(weatherState.validAt, compactClockFormat)} · {$t('Rotterdam time')}</span></div>
           <p>{$t('Model conditions for Rotterdam Centrum. The Aerial map shows model clouds that fade as you zoom into the streets.')}</p>
           <p>{$t('Rain intensity is a model estimate. The radar overlay shows observed precipitation.')}</p>
-          {#if weatherState.status === 'stale'}<p>{$t('These values are outdated. Weather effects resume when fresh data returns.')}</p>{/if}
+          {#if weatherState.refreshDelayed}<p>{$t('Weather refresh is delayed. Showing the latest model while it remains current.')}</p>
+          {:else if weatherState.status === 'stale'}<p>{$t('These values are outdated. Weather effects resume when fresh data returns.')}</p>{/if}
           <button class="refresh" on:click={() => weatherController?.refreshLive()}>{$t('Refresh weather')} <span aria-hidden="true">↻</span></button>
         </div>
       </details>

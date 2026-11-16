@@ -21,14 +21,14 @@ test('release smoke check requests its selected origin and validates it with the
     requests.push(request.url);
     response.setHeader('Content-Type', 'application/json');
     if (request.url === '/health/ready') response.end(JSON.stringify({ database: { connected: true }, redis: { connected: true } }));
-    else if (request.url === '/api/v1/weather/live') response.end(JSON.stringify(snapshot));
+    else if (request.url === '/api/v1/weather/grid') response.end(JSON.stringify(snapshot));
     else { response.statusCode = 404; response.end('{}'); }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
     const { stdout } = await execute(process.execPath,
       [fileURLToPath(new URL('../scripts/check-live-weather.mjs', import.meta.url)), `http://127.0.0.1:${server.address().port}`]);
-    assert.deepEqual(requests, ['/health/ready', '/api/v1/weather/live']);
+    assert.deepEqual(requests, ['/health/ready', '/api/v1/weather/grid']);
     assert.equal(JSON.parse(stdout).status, 'live');
     assert.equal(JSON.parse(stdout).nodes, 12);
   } finally { await new Promise(resolve => server.close(resolve)); }
