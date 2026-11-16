@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { openMap, dismissWelcome } from './navigation.js';
 import { ROTTERDAM_WEATHER_NODES } from '../../src/lib/weatherEngine.js';
+import { PNG } from 'pngjs';
 
 const weatherSnapshot = () => ({
   data_status: 'fresh', source: 'Open-Meteo / KNMI HARMONIE model',
@@ -13,6 +14,88 @@ const weatherSnapshot = () => ({
 });
 
 const mockWeather = page => page.route('**/api/v1/weather/live', route => route.fulfill({ json: weatherSnapshot() }));
+
+test('clouds keep covering the water after data layers, selections and style changes', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await mockWeather(page);
+  await page.route('**/api/v1/spatial/districts?**', route => route.fulfill({ json: {
+    type: 'FeatureCollection', features: [{ type: 'Feature', id: 'cloud-test-district',
+      geometry: { type: 'Polygon', coordinates: [[[4.46, 51.90], [4.51, 51.90], [4.51, 51.94], [4.46, 51.94], [4.46, 51.90]]] },
+      properties: { name: 'Cloud test district' } }]
+  } }));
+  await page.route('**/api/v1/live?**', route => route.fulfill({ json: {
+    type: 'FeatureCollection', features: [{ type: 'Feature', id: 'cloud-test-news',
+      geometry: { type: 'Point', coordinates: [4.48, 51.92] },
+      properties: { title: 'City cloud-order report', category: 'news' } }]
+  } }));
+  await openMap(page, '/');
+  await page.waitForFunction(() => window.map?.getLayer('coastal-ocean') &&
+    window.map?.getLayer('rotterdam-volumetric-weather')?.implementation.lastFboRenderMs > 0);
+  const camera = await page.evaluate(() => ({ center: map.getCenter().toArray(), zoom: map.getZoom() }));
+  async function waterPixels() {
+    await page.evaluate(() => new Promise(resolve => { map.once('render', resolve); map.triggerRepaint(); }));
+    return PNG.sync.read(await page.screenshot({ clip: { x: 1100, y: 360, width: 80, height: 300 } })).data;
+  }
+  function difference(a, b) {
+    let total = 0;
+    for (let i = 0; i < a.length; i++) if (i % 4 !== 3) total += Math.abs(a[i] - b[i]);
+    return total / (a.length / 4 * 3);
+  }
+  async function expectAtmosphereOrder() {
+    await expect.poll(() => page.evaluate(() => {
+      // Serialized style JSON omits custom layers. Use the actual render order.
+      const order = map.getLayersOrder();
+      const weather = order.indexOf('rotterdam-volumetric-weather');
+      const ground = ['rotterdam-water-mask', 'coastal-river-blend', 'coastal-ocean'];
+      const markers = order.filter(id => (id.startsWith('explore-') || id.startsWith('explorer-selection')) && map.getLayer(id).type === 'symbol');
+      return { aboveWater: weather >= 0 && ground.every(id => order.indexOf(id) >= 0 && order.indexOf(id) < weather),
+        belowMarkers: markers.every(id => order.indexOf(id) > weather) };
+    })).toEqual({ aboveWater: true, belowMarkers: true });
+  }
+  const cloudyWater = await waterPixels();
+  await page.evaluate(() => weatherController.setEnabled(false));
+  const clearWater = await waterPixels();
+  expect(difference(cloudyWater, clearWater)).toBeGreaterThan(5);
+  await page.evaluate(() => weatherController.setEnabled(true));
+  await expectAtmosphereOrder();
+
+  await page.getByRole('button', { name: 'Neighbourhoods', exact: true }).click();
+  await page.waitForFunction(() => map.getLayer('explore-districts-line'));
+  await expectAtmosphereOrder();
+  expect(difference(await waterPixels(), cloudyWater)).toBeLessThan(2);
+  await page.getByRole('button', { name: 'Local news', exact: true }).click();
+  await page.waitForFunction(() => map.getLayer('explore-news-point'));
+  await expectAtmosphereOrder();
+  await page.getByRole('button', { name: /In view/ }).click();
+  await page.getByRole('button', { name: /City cloud-order report/ }).click();
+  await page.waitForFunction(() => map.getLayer('explorer-selection-point'));
+  await expectAtmosphereOrder();
+  await page.evaluate(camera => map.jumpTo(camera), camera);
+  expect(difference(await waterPixels(), cloudyWater)).toBeLessThan(2);
+
+  await page.getByRole('button', { name: 'Map', exact: true }).click();
+  for (const mode of ['Night', 'Aerial', 'Atlas', 'Aerial']) {
+    await page.getByRole('button', { name: mode, exact: true }).click();
+    if (mode === 'Aerial') {
+      await expectAtmosphereOrder();
+      expect(difference(await waterPixels(), cloudyWater)).toBeLessThan(2);
+    } else await expect.poll(() => page.evaluate(() => !!map.getLayer('rotterdam-volumetric-weather'))).toBe(false);
+  }
+  await page.evaluate(() => new Promise(resolve => {
+    map.once('webglcontextrestored', resolve);
+    const extension = map.painter.context.gl.getExtension('WEBGL_lose_context');
+    extension.loseContext();
+    setTimeout(() => extension.restoreContext(), 100);
+  }));
+  await expectAtmosphereOrder();
+  expect(difference(await waterPixels(), cloudyWater)).toBeLessThan(2);
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await expectAtmosphereOrder();
+  expect(await page.evaluate(() => map.painter.context.gl.getError())).toBe(0);
+  expect(errors).toEqual([]);
+});
 
 test('model clouds render on Aerial and clear when switching to Night or Atlas', async ({ page }) => {
   const errors = [];

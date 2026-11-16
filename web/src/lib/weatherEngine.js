@@ -16,6 +16,7 @@
 
 import { ORIGIN, WORLD_ORIGIN, METERS_PER_WORLD, mercator, localPoint, localMatrix } from './oceanGeometry.js';
 import { API_BASE_URL as WEATHER_API_BASE_URL } from './apiBase.js';
+import { firstDataOverlay } from './mapLayerOrder.js';
 
 export const WEATHER_LAYER_ID = 'rotterdam-volumetric-weather';
 
@@ -1155,12 +1156,17 @@ export function createWeatherEngineController(map, onStateChange = null) {
   function ensureTopmostWeatherLayer() {
     if (!map || !map.getStyle() || !map.getLayer(WEATHER_LAYER_ID)) return;
     const layers = map.getStyle().layers || [];
-    const overlay = layers.find(layer => layer.id.startsWith('explore-') || layer.id.startsWith('explorer-selection'));
-    // MapLibre 2.x excludes custom layers from getStyle().layers. Comparing
-    // serialized indices would reorder on every styledata event indefinitely.
+    // Area/line data lives beneath the city mask. Anchoring the atmosphere to
+    // those layers lets the ocean paint over the clouds outside the city.
+    // Only map glyphs and observed radar should sit above the atmosphere.
     const weatherLayer = map.getLayer(WEATHER_LAYER_ID);
-    const before = overlay?.id || null;
-    if (orderedWeatherLayer === weatherLayer && orderedBeforeLayer === before) return;
+    const before = firstDataOverlay(layers) || null;
+    // Serialized style JSON omits custom layers, including ocean and weather.
+    // Check the actual render order, including after asynchronous insertions.
+    const order = map.getLayersOrder();
+    const target = before ? order.indexOf(before) : order.length;
+    if (orderedWeatherLayer === weatherLayer && orderedBeforeLayer === before &&
+        order.indexOf(WEATHER_LAYER_ID) === target - 1) return;
     orderedWeatherLayer = weatherLayer;
     orderedBeforeLayer = before;
     try { map.moveLayer(WEATHER_LAYER_ID, before || undefined); }

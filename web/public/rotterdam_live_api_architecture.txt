@@ -106,7 +106,7 @@ City Pulse combines a time/day/district prior, event and weather terms, contextu
 - Coincident news keeps a numbered group at street zoom. Clicking it opens its real articles; coordinates are not randomly scattered. Records without usable map locations remain readable without a false marker or camera flight.
 - District fills, outlines and selections stay below the city mask across Aerial, Night and Atlas. Search results outside the central silhouette remain readable without flying to empty water.
 - SVG map glyphs remain distinct by feature type. Layer fades, selection transitions and camera movement respect reduced-motion preferences.
-- Weather illustration appears only on Aerial, fades at street zoom and stays separate from observed rain radar. Data markers remain legible above the illustration.
+- Weather illustration appears only on Aerial, fades at street zoom and stays separate from observed rain radar. Data markers remain legible above the illustration. The atmosphere stays above the city mask, river blend and ocean, and below data glyphs and radar. The weather and water installers share the same overlay anchor and use the actual render order for custom layers, including after graphics-context recovery.
 - MapLibre 6.18 uses its bundled worker explicitly; custom ocean/weather renderers accept its projection-matrix contract. WebGL2 is required; unsupported devices receive an accessible error and recovery control.
 
 ## API families
@@ -134,7 +134,7 @@ CSV category/subcategory filters, district aliases, bounded pagination and bbox 
 
 Local verification includes isolated backend tests, frontend unit/build checks, browser tests, desktop/mobile screenshots, source outage/last-good cases, map bounds and mask ordering, coincident stories, translated/collapsible controls, safe source text/links and a built-preview same-origin check. Backend tests and source staging use a disposable database and a separate Redis logical database, backed by a restore-tested pre-ingestion backup.
 
-Completed checks: 268 backend tests passed, 23 frontend unit tests passed, the production build passed, and all 43 browser checks passed, including the built-preview API connection check. All 72 GET/documentation smoke requests returned HTTP 200. Availability metadata remains part of interpreting those responses. Fifteen additional local activation checks confirmed the complete address snapshot and its search/detail compatibility.
+Completed checks: 268 backend tests passed, 23 frontend unit tests passed, the production build passed, and all 44 browser checks passed, including the built-preview API connection check. All 72 GET/documentation smoke requests returned HTTP 200. Availability metadata remains part of interpreting those responses. Fifteen additional local activation checks confirmed the complete address snapshot and its search/detail compatibility.
 
 Public-tree checks enforce the private-source boundary and reject sensitive tracked material. Production dependency auditing reported no production advisories after the MapLibre upgrade; that is a dependency check, not a claim of complete security.
 
