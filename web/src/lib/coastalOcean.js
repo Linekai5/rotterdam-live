@@ -1,9 +1,10 @@
-import boundary from './rotterdam_boundary.json';
+import boundary from './rotterdam_boundary.json' with { type: 'json' };
 import metadata from './ocean-distance.json';
 import distanceUrl from './ocean-distance.png';
 import riverBlend from './river-blend.json';
 import palette from './ocean-palette.json';
 import { boundaryRing, oceanMesh, polygonMesh, localMatrix } from './oceanGeometry.js';
+import { firstDataOverlay } from './mapLayerOrder.js';
 
 export const OCEAN_LAYER = 'coastal-ocean';
 const mesh = oceanMesh(boundaryRing(boundary));
@@ -121,6 +122,7 @@ class CoastalOcean {
   }
 
   render(gl, matrix) {
+    matrix = matrix?.defaultProjectionData?.mainMatrix || matrix?.modelViewProjectionMatrix || matrix;
     gl.useProgram(this.program);
     gl.disable(gl.CULL_FACE);
     gl.disable(gl.DEPTH_TEST);
@@ -180,10 +182,14 @@ export function installCoastalOcean(map) {
     try {
       const image = await distanceImage();
       if (removed || !map.getStyle() || !map.getLayer('satellite-layer') || map.getLayer(OCEAN_LAYER)) return;
-      const firstLabel = map.getStyle().layers.find(layer => layer.type === 'symbol')?.id;
+      const layers = map.getStyle().layers;
+      const firstLabel = layers.find(layer => layer.type === 'symbol')?.id;
       const weatherLayerId = map.getLayer('rotterdam-volumetric-weather') ? 'rotterdam-volumetric-weather' : undefined;
-      map.addLayer(new CoastalOcean(image, true), firstLabel || weatherLayerId);
-      map.addLayer(new CoastalOcean(image), weatherLayerId);
+      // The ocean can finish loading before the weather layer, especially after
+      // context recovery. Reserve its place below data glyphs in either case.
+      const before = weatherLayerId || firstDataOverlay(layers);
+      map.addLayer(new CoastalOcean(image, true), firstLabel || before);
+      map.addLayer(new CoastalOcean(image), before);
       map.setLayoutProperty('rotterdam-water-mask', 'visibility', 'none');
     } catch (error) {
       if (map.getLayer(OCEAN_LAYER)) map.removeLayer(OCEAN_LAYER);

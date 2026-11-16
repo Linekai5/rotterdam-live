@@ -16,9 +16,9 @@ test('bespoke SVG event markers render as distinct retina symbols and survive st
     if (!map?.getLayer('explore-events-point')) return 0;
     return map.queryRenderedFeatures({ layers: ['explore-events-point'] }).length;
   })).toBeGreaterThanOrEqual(4);
-  const symbols = await page.evaluate(() => {
+  const symbols = await page.evaluate(async () => {
     const map = window.map;
-    const source = map.getSource('explore-events')._data;
+    const source = await map.getSource('explore-events').getData();
     return { type: map.getLayer('explore-events-point').type, kinds: source.features.map(f => f.properties.__markerKind), registered: ['concert', 'festival', 'theatre', 'exhibition', 'football'].every(kind => map.hasImage(`city-mark-${kind}`)) };
   });
   expect(symbols.type).toBe('symbol');

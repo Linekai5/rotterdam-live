@@ -34,7 +34,7 @@
       return { label: translate('Spaces available'), value: number(details.available_spaces), unit, number: true };
     }
     if (p.__dataset === 'traffic' && Number.isFinite(p.speed_kmh)) {
-      return { label: translate('Current corridor speed'), value: number(p.speed_kmh), unit: 'km/h', number: true };
+      return { label: translate(p.speed_measurement_type === 'route_average_estimate' ? 'Estimated route speed' : 'Reported corridor speed'), value: number(p.speed_kmh), unit: 'km/h', number: true };
     }
     if (p.__dataset === 'crowd' && Number.isFinite(p.crowd_index)) {
       return { label: translate('Estimated district activity'), value: number(p.crowd_index), unit: translate('/ 100 · model estimate'), number: true };
@@ -84,7 +84,8 @@
         <span class="place-label">{$t('SELECTED LOCATION')} <span aria-hidden="true">↗</span></span>
         <h2>{featureTitle(feature, $language)}</h2>
         <p class="subtitle">{featureSubtitle(feature, $language)}</p>
-        {#if layerState?.status === 'stale'}<div class="record-state" role="status">{$t('Last available record · this feed could not refresh.')}</div>{/if}
+        {#if layerState?.freshness === 'stale'}<div class="record-state" role="status">{$t('Source data is outdated.')}</div>
+        {:else if layerState?.freshness === 'unknown'}<div class="record-state" role="status">{$t('Source freshness is unverified.')}</div>{/if}
         {#if highlight}
           <div class="primary-metric" class:numeric={highlight.number}>
             <span class="metric-label">{highlight.label}</span>
@@ -106,7 +107,7 @@
         <div class="actions">
           {#if action}<a class="primary-action" href={action.href} target="_blank" rel="noopener noreferrer">{$t(action.label)}<ExplorerIcon name="arrow" size={16}/></a>{/if}
           {#if district && profileStatus !== 'ready'}<button disabled={profileStatus === 'loading'} on:click={loadProfile}>{$t(profileStatus === 'loading' ? 'Loading district profile…' : profileStatus === 'error' ? 'Retry district profile' : 'Explore this district')}<ExplorerIcon name="district" size={16}/></button>{/if}
-          {#if canFocus}<button on:click={onFocus}>{$t('Show on map')}<ExplorerIcon name="pin" size={16}/></button>{:else}<p class="record-state">{$t('This place is outside the central map area. Its location details are shown here.')}</p>{/if}
+          {#if canFocus}<button on:click={onFocus}>{$t('Show on map')}<ExplorerIcon name="pin" size={16}/></button>{:else}<p class="record-state">{$t(feature?.geometry ? 'This place is outside the central map area. Its location details are shown here.' : 'The source has not provided a map location for this record.')}</p>{/if}
         </div>
       </div>
     </div>

@@ -21,7 +21,7 @@ test('the built preview serves its API on the same origin without localhost CORS
     await page.getByRole('button', { name: 'Traffic', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Traffic', exact: true })).toContainText(/\d+ in this view/);
     await expect.poll(() => page.evaluate(() => !!window.map.getSource('explore-traffic'))).toBe(true);
-    expect(calls.some(url => url.pathname === '/api/v1/weather/live')).toBe(true);
+    expect(calls.some(url => url.pathname === '/api/v1/weather/grid')).toBe(true);
     expect(calls.some(url => url.pathname === '/api/v1/mobility/traffic')).toBe(true);
     expect(calls.every(url => url.origin === new URL(origin).origin)).toBe(true);
     expect(errors).toEqual([]);

@@ -3,8 +3,9 @@
   import { fly, slide } from 'svelte/transition';
   import { quintOut } from 'svelte/easing';
   import { createMapDataController } from './mapDataController.js';
-  import { MAP_DATASETS, DATASET_BY_ID, featureTitle, featureSubtitle, normalizeFeature, geometryBounds, intersectsBounds, formatDate } from './explorerData.js';
+  import { MAP_DATASETS, DATASET_BY_ID, featureTitle, featureSubtitle, normalizeFeature, geometryBounds, formatDate, pointLocationKey, locationLabel } from './explorerData.js';
   import { API_BASE_URL } from './liveLayers.js';
+  import { cityCoverage, featureHasCityCoverage } from './cityCoverage.js';
   import { language, t } from './i18n.js';
   import ExplorerIcon from './ExplorerIcon.svelte';
   import MapAppearance from './MapAppearance.svelte';
@@ -37,13 +38,15 @@
   let searchInput;
   let searchResultsEl;
   let mobileTrigger;
-  let desktopTrigger;
+  let desktopSummary;
   let desktopOpen = true;
   let isMobile = false;
   let selected = null;
   let selectionOrigin = null;
   let restoreMobile = false;
   let focusedLayer = null;
+  let focusedLocation = null;
+  let locationHeading;
   let listLimit = 40;
   let reduceMotion = false;
   let mobileOpen = false;
@@ -51,7 +54,9 @@
   $: panelVisible = isMobile ? mobileOpen : desktopOpen;
   $: activeCount = Object.keys(layers).length;
   $: if (focusedLayer && !layers[focusedLayer]) focusedLayer = null;
-  $: activeFeatures = focusedLayer ? layers[focusedLayer]?.features || [] : Object.values(layers).flatMap(layer => layer.features);
+  $: if (focusedLocation && !layers[focusedLocation.dataset]) focusedLocation = null;
+  $: layerFeatures = focusedLayer ? layers[focusedLayer]?.features || [] : Object.values(layers).flatMap(layer => layer.features);
+  $: activeFeatures = focusedLocation ? layerFeatures.filter(feature => feature.properties.__dataset === focusedLocation.dataset && focusedLocation.keys.has(pointLocationKey(feature))) : layerFeatures;
   $: visibleItems = activeFeatures.slice(0, listLimit);
   $: isLoading = Object.values(layers).some(layer => layer.status === 'loading');
   $: isLimited = Object.values(layers).some(layer => layer.truncated);
@@ -69,6 +74,12 @@
   };
   function layerSummary(layer, dataset, translate) {
     if (!layer) return translate(dataset.caption);
+    if (layer.status === 'stale' && !layer.error) return translate('Source data is outdated');
+    if (dataset.id === 'news' && !layerStatusLabels[layer.status]) {
+      const stories = translate(layer.features.length === 1 ? '1 story' : '{count} stories', { count: layer.features.length });
+      const locations = translate(layer.locations === 1 ? '1 map location' : '{count} map locations', { count: layer.locations });
+      return `${stories} · ${locations}`;
+    }
     return translate(layerStatusLabels[layer.status] || '{count} in this view', { count: layer.features.length });
   }
   onMount(() => {
@@ -84,7 +95,7 @@
       selected = feature;
       if (feature) selectionOrigin = document.activeElement;
       if (feature && mobile()) { restoreMobile = mobileOpen; mobileOpen = false; }
-    }, value => hovered = value);
+    }, value => hovered = value, { onLocationGroup: openLocationGroup });
     const shortcuts = async event => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault(); controller?.select(null); restoreMobile = false; mobileOpen = mobile(); desktopOpen = true; await tick(); searchInput?.focus();
@@ -93,7 +104,7 @@
         if (selected) closeSelection();
         else if (query) { query = ''; search(); searchInput?.focus(); }
         else if (mobileOpen) { mobileOpen = false; mobileTrigger?.focus(); }
-        else if (!isMobile && desktopOpen) { desktopOpen = false; desktopTrigger?.focus(); }
+        else if (!isMobile && desktopOpen) { desktopOpen = false; desktopSummary?.focus(); }
       }
     };
     window.addEventListener('keydown', shortcuts);
@@ -101,13 +112,12 @@
   });
   onDestroy(() => { controller?.destroy(); clearTimeout(searchTimer); searchAbort?.abort(); });
   function canFocus(feature) {
-    const limit = map.getMaxBounds();
-    return !limit || intersectsBounds(feature, [limit.getWest(), limit.getSouth(), limit.getEast(), limit.getNorth()]);
+    return featureHasCityCoverage(feature);
   }
   function moveTo(feature) {
-    if (!canFocus(feature)) return;
-    const box = geometryBounds(feature.geometry);
-    if (!box) return;
+    const coverage = cityCoverage(feature);
+    if (!coverage) return;
+    const box = coverage.bounds;
     const duration = reduceMotion ? 0 : 900;
     if (feature.geometry.type === 'Point') map.flyTo({ center: feature.geometry.coordinates, zoom: Math.max(14, map.getZoom()), offset: mobile() ? [0, -90] : [130, 0], duration, essential: false });
     else map.fitBounds([[box[0], box[1]], [box[2], box[3]]], { padding: mobile() ? { top: 140, bottom: 280, left: 35, right: 35 } : { top: 100, bottom: 100, left: 390, right: 80 }, duration, maxZoom: 14 });
@@ -129,6 +139,17 @@
   function toggleLayer(id) {
     controller?.toggle(id);
     if (focusedLayer === id && !layers[id]) focusedLayer = null;
+  }
+  async function openLocationGroup(group) {
+    focusedLayer = group.dataset;
+    focusedLocation = { ...group, keys: new Set(group.features.map(pointLocationKey)) };
+    controller?.select(null);
+    restoreMobile = false;
+    desktopOpen = true;
+    if (mobile()) mobileOpen = true;
+    setTab('activity');
+    await tick();
+    locationHeading?.focus({ preventScroll: true });
   }
   function search() {
     clearTimeout(searchTimer); searchAbort?.abort(); searchAbort = null;
@@ -166,18 +187,17 @@
     {$t(mobileOpen ? 'Back to the map' : 'Explore the city')}
     <span>{activeCount ? $t(activeCount === 1 ? '1 layer' : '{count} layers', { count: activeCount }) : '+'}</span>
   </button>
-  <button class="desktop-trigger" bind:this={desktopTrigger} aria-label={$t(desktopOpen ? 'Hide explorer' : 'Show explorer')}
-    title={$t(desktopOpen ? 'Hide explorer' : 'Show explorer')} aria-expanded={desktopOpen} aria-controls="city-explorer" on:click={() => desktopOpen = !desktopOpen}>
-    <ExplorerIcon name="layers" size={18}/>
-    {#if activeCount}<span>{activeCount}</span>{/if}
-  </button>
   <aside id="city-explorer" class="explorer" class:desktop-collapsed={!desktopOpen && !isMobile} class:mobile-open={mobileOpen}
-    aria-hidden={!panelVisible} inert={!panelVisible} aria-label={$t('City explorer')}>
-    <div class="intro">
+    aria-hidden={isMobile && !mobileOpen} inert={isMobile && !mobileOpen} aria-label={$t('City explorer')}>
+    <button class="intro" bind:this={desktopSummary} type="button" on:click={() => desktopOpen = !desktopOpen}
+      aria-expanded={desktopOpen} aria-controls="city-explorer-content" aria-label={$t('Rotterdam explorer details')}
+      title={$t(desktopOpen ? 'Collapse city explorer' : 'Expand city explorer')}>
       <span class="eyebrow"><span class="section-index">01 /</span> {$t('THE CITY AT YOUR FINGERTIPS')}</span>
-      <h1 aria-label={$t('Explore Rotterdam.')}><span>{$t('Explore')} </span><span>Rotterdam<span class="title-dot">.</span></span></h1>
-      <p>{$t('A closer look at what moves the city.')}</p>
-    </div>
+      <span class="summary-title" role="heading" aria-level="1" aria-label={$t('Explore Rotterdam.')}><span>{$t('Explore')} </span><span>Rotterdam<span class="title-dot">.</span></span></span>
+      <span class="summary-subtitle">{desktopOpen ? $t('A closer look at what moves the city.') : activeCount ? $t(activeCount === 1 ? '1 layer' : '{count} layers', { count: activeCount }) : $t('Search and map layers')}</span>
+      <span class="summary-chevron" class:open={desktopOpen} aria-hidden="true">⌄</span>
+    </button>
+    <div id="city-explorer-content" class="explorer-body" aria-hidden={!panelVisible} inert={!panelVisible}>
     <div class="search-box">
       <ExplorerIcon name="search" size={17}/>
       <input bind:this={searchInput} bind:value={query} aria-label={$t('Search Rotterdam')} aria-controls="place-search-results"
@@ -200,7 +220,7 @@
         {:else if !results.length}<p>{$t('No places found. Try another name.')}</p>{/if}
         {#each results as result}
           <button class="search-result" on:click={() => { focus(result); query = ''; search(); }}>
-            <strong>{featureTitle(result, $language)}</strong><small>{featureSubtitle(result, $language)}</small>
+            <strong>{featureTitle(result, $language)}</strong><small>{featureSubtitle(result, $language)}{#if !canFocus(result)} · {$t(result.geometry ? 'Outside current map area' : 'Location not provided')}{/if}</small>
             <span><ExplorerIcon name="arrow" size={13}/></span>
           </button>
         {/each}
@@ -267,8 +287,19 @@
                         {#if dataset.id === 'cameras'}
                           <p class="camera-note">{$t('Mapped locations from OpenStreetMap. This source does not provide public video.')}</p>
                         {/if}
-                        <div class="source-kind">{$t(sourceType(dataset.id))}<span>{$t(dataset.source)}</span></div>
-                        {#if layer.truncated}<p class="limit-note">{$t('Up to 150 loaded here. Zoom in for a smaller selection.')}</p>{/if}
+                        <div class="source-kind">{$t(sourceType(dataset.id))}<span>{layer.source || $t(dataset.source)}</span></div>
+                        {#if layer.status === 'ready' && layer.freshness === 'unknown'}<p class="source-notice" role="status">{$t('Source freshness is unverified.')}</p>{/if}
+                        {#if layer.observedAt}<p class="source-timestamp">{$t('Source updated')} · {formatDate(layer.observedAt, true, $language)}</p>{/if}
+                        {#if layer.coverage}
+                          {@const coverage = typeof layer.coverage === 'string' ? layer.coverage.replaceAll('_', ' ') : layer.coverage.description || layer.coverage.label || (layer.coverage.status === 'partial' || layer.coverage.complete === false ? $t('Partial source coverage') : '')}
+                          {#if coverage}<p class="limit-note">{$t(coverage)}</p>{/if}
+                        {/if}
+                        {#if layer.providerTotal != null && layer.providerTotal !== layer.totalLoaded}<p class="limit-note">{$t('Provider reports {total} matches; {loaded} loaded.', { total: layer.providerTotal, loaded: layer.totalLoaded })}</p>{/if}
+                        {#if layer.unlocated > 0}<p class="limit-note">{$t(layer.unlocated === 1 ? '1 record has no reported map location.' : '{count} records have no reported map location.', { count: layer.unlocated })}</p>{/if}
+                        {#if layer.unmappedInView > (layer.unlocated || 0)}<p class="limit-note">{$t('{mapped} mapped; {outside} outside current map area.', { mapped: layer.mappedInView, outside: layer.unmappedInView - (layer.unlocated || 0) })}</p>{/if}
+                        {#if !layer.unmappedInView && layer.mappedLoaded < layer.totalLoaded}<p class="limit-note">{$t('{mapped} of {loaded} loaded records have map coverage.', { mapped: layer.mappedLoaded, loaded: layer.totalLoaded })}</p>{/if}
+                        {#if layer.truncated}<p class="limit-note">{$t('{count} loaded here. Zoom in for a smaller selection.', { count: layer.totalLoaded })}</p>{/if}
+                        {#if dataset.id === 'news'}<p class="limit-note">{$t('Map locations may be approximate. Open a numbered marker to browse all stories there.')}</p>{/if}
                         {#if ['crowd', 'traffic'].includes(dataset.id)}
                           <div class="legend">
                             <span>{$t(dataset.id === 'crowd' ? 'Quiet' : 'Free flow')}</span>
@@ -276,7 +307,7 @@
                             <span>{$t(dataset.id === 'crowd' ? 'Busy · estimate' : 'Delayed')}</span>
                           </div>
                         {/if}
-                        <button class="browse-layer" on:click={() => { focusedLayer = dataset.id; setTab('activity'); }}>
+                        <button class="browse-layer" on:click={() => { focusedLayer = dataset.id; focusedLocation = null; setTab('activity'); }}>
                           {$t('Explore {layer}', { layer: label.toLowerCase() })}<ExplorerIcon name="arrow" size={11}/>
                         </button>
                       </div>
@@ -287,14 +318,21 @@
             {/each}
           {:else if tab === 'activity'}
             <div class="activity-heading">
-              <span>{$t(isLoading ? 'Updating your view…' : 'Selected layers · current view')}</span>
-              <span>{$t('{count} places & reports', { count: activeFeatures.length })}</span>
+              <span>{$t(isLoading ? 'Updating your view…' : focusedLocation ? 'Selected map location' : 'Selected layers · current view')}</span>
+              <span>{$t(focusedLayer === 'news' ? '{count} stories' : '{count} places & reports', { count: activeFeatures.length })}</span>
             </div>
+            {#if focusedLocation}
+              <div class="location-group">
+                <div><h2 tabindex="-1" bind:this={locationHeading}>{$t(focusedLocation.dataset === 'news' ? 'Stories at this location' : 'Reports at this location')}</h2>
+                  <p>{locationLabel(activeFeatures[0] || focusedLocation.features[0], $language)}</p></div>
+                <button type="button" aria-label={$t('Show all locations')} on:click={() => focusedLocation = null}><ExplorerIcon name="close" size={15}/></button>
+              </div>
+            {/if}
             {#if activeCount}
               <div class="filter-chips" aria-label={$t('Filter results by layer')}>
-                <button class:current={!focusedLayer} aria-pressed={!focusedLayer} on:click={() => { focusedLayer = null; listLimit = 40; }}>{$t('All')}</button>
+                <button class:current={!focusedLayer} aria-pressed={!focusedLayer} on:click={() => { focusedLayer = null; focusedLocation = null; listLimit = 40; }}>{$t('All')}</button>
                 {#each Object.keys(layers) as id}
-                  <button class:current={focusedLayer === id} aria-pressed={focusedLayer === id} on:click={() => { focusedLayer = id; listLimit = 40; }}>{$t(DATASET_BY_ID[id].label)}</button>
+                  <button class:current={focusedLayer === id} aria-pressed={focusedLayer === id} on:click={() => { focusedLayer = id; focusedLocation = null; listLimit = 40; }}>{$t(DATASET_BY_ID[id].label)}</button>
                 {/each}
               </div>
             {/if}
@@ -318,7 +356,7 @@
             {#each visibleItems as feature, index (`${feature.properties.__dataset}-${feature.id || feature.properties.id || index}`)}
               <button class="result-row" style={`--row:${Math.min(index, 8)}`} on:click={() => focus(feature)}>
                 <span class="result-symbol"><ExplorerIcon name={DATASET_BY_ID[feature.properties.__dataset]?.icon || 'pin'} size={19}/></span>
-                <strong>{featureTitle(feature, $language)}</strong><small>{featureSubtitle(feature, $language)}</small>
+                <strong>{featureTitle(feature, $language)}</strong><small>{featureSubtitle(feature, $language)}{#if !canFocus(feature)} · {$t(feature.geometry ? 'Outside current map area' : 'Location not provided')}{/if}</small>
                 <span class="result-arrow"><ExplorerIcon name="arrow" size={14}/></span>
                 {#if feature.properties.start_time}<time>{formatDate(feature.properties.start_time, true, $language)}</time>{/if}
               </button>
@@ -342,6 +380,7 @@
         <span class="coordinates">{MAP_DATASETS.length} {$t('LAYERS')}</span>
       {/if}
     </footer>
+    </div>
   </aside>
   {#if hovered && !selected}
     <div class="map-tooltip" style={`left:${Math.max(12, Math.min(hovered.point.x + 18, map.getContainer().clientWidth - 265))}px;top:${Math.max(12, Math.min(hovered.point.y - 16, map.getContainer().clientHeight - 160))}px`}>
@@ -364,15 +403,30 @@
   .identity strong { font-weight:600; font-size:22px; letter-spacing:-1.1px; } .identity strong span { font-weight:400; color:#b2c09f; margin-left:1px; }
   .identity p { margin:4px 0 0; font-size:8px; letter-spacing:1.5px; color:#a0a79b; }
 
-  .desktop-trigger { position:absolute; left:336px; top:33px; pointer-events:auto; width:42px; height:42px; display:grid; place-items:center; border:1px solid var(--edge); border-radius:3px; background:#171a19f5; color:#d6ddcc; }
-  .desktop-trigger:hover { background:#30372d; transform:translateY(-2px); } .desktop-trigger>span { position:absolute; top:-6px; right:-6px; padding:2px 5px; min-width:10px; font-size:9px; color:#1a2017; background:var(--accent); border-radius:2px; }
-  .explorer { position:absolute; left:var(--explorer-inset); top:104px; bottom:24px; width:var(--explorer-width); pointer-events:auto; display:flex; flex-direction:column; overflow:hidden; background:#171a19fa; border:1px solid var(--edge); border-radius:4px; box-shadow:0 12px 40px #0003; animation:interface-in .8s .08s cubic-bezier(.16,1,.3,1) both; transition:transform .55s cubic-bezier(.16,1,.3,1),opacity .3s,visibility .4s; }
-  .explorer.desktop-collapsed { animation:none; opacity:0; visibility:hidden; pointer-events:none; transform:translateX(-35px); }
-  .intro { position:relative; padding:25px 25px 21px; border-bottom:1px solid #ffffff08; overflow:hidden; flex-shrink:0; }
+
+
+  .explorer { position:absolute; left:var(--explorer-inset); top:104px; height:calc(100dvh - 128px); width:var(--explorer-width); pointer-events:auto; display:flex; flex-direction:column; overflow:hidden; background:#171a19fa; border:1px solid var(--edge); border-radius:4px; box-shadow:0 12px 40px #0003; animation:interface-in .8s .08s cubic-bezier(.16,1,.3,1) both; transition:height .42s cubic-bezier(.16,1,.3,1),width .42s cubic-bezier(.16,1,.3,1),transform .55s cubic-bezier(.16,1,.3,1),opacity .3s,visibility .4s; }
+  .explorer.desktop-collapsed { width:258px; height:84px; }
+  .explorer-body { display:flex; flex-direction:column; flex:1; min-height:0; opacity:1; transition:opacity .22s; }
+  .desktop-collapsed .explorer-body { opacity:0; overflow:hidden; pointer-events:none; }
+  .intro:hover { background:#ffffff03; }
+  .summary-chevron { position:absolute; top:18px; right:19px; color:var(--muted); font-size:17px; transition:transform .4s; }
+  .summary-chevron.open { transform:rotate(180deg); }
+  .desktop-collapsed .intro { padding:15px 18px; }
+  .desktop-collapsed .intro .eyebrow { display:none; }
+  .desktop-collapsed .intro .summary-title { font-size:20px; letter-spacing:-.65px; margin:0 0 7px; }
+  .desktop-collapsed .intro .summary-subtitle { font-size:10px; }
+  .location-group { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:14px 13px; margin:0 0 15px; border:1px solid var(--edge); background:#bdc9b008; border-radius:3px; }
+  .location-group h2 { font-size:13px; font-weight:500; line-height:1.5; margin:0; }
+  .location-group p { font-size:11px; line-height:1.55; color:var(--muted); margin:5px 0 0; }
+  .location-group button { display:flex; padding:5px; border:0; background:none; color:var(--muted); }
+  .source-notice,.source-timestamp { font-size:10px; line-height:1.55; margin:8px 0 0; color:#b7b1a2; }
+  .source-timestamp { color:var(--muted); }
+  .intro { display:block; width:100%; border:0; background:none; color:inherit; text-align:left; position:relative; padding:25px 25px 21px; border-bottom:1px solid #ffffff08; overflow:hidden; flex-shrink:0; transition:padding .4s,background .2s; }
   .eyebrow { display:block; font-size:9px; font-weight:500; letter-spacing:1.3px; color:#b3b8aa; } .section-index { margin-right:8px; color:#6d7868; }
-  .intro h1 { font-size:33px; line-height:1.08; letter-spacing:-1.5px; font-weight:500; margin:17px 0 10px; position:relative; z-index:1; }
-  .intro h1>span { display:inline-block; animation:title-in 1s cubic-bezier(.16,1,.3,1) both; } .intro h1>span:nth-child(2) { margin-left:5px; animation-delay:.12s; }
-  .title-dot { color:var(--accent); } .intro p { margin:0; font-size:12px; color:#a9b0a1; }
+  .intro .summary-title { display:block; font-size:33px; line-height:1.08; letter-spacing:-1.5px; font-weight:500; transition:font-size .4s,margin .4s,letter-spacing .4s; margin:17px 0 10px; position:relative; z-index:1; }
+  .intro .summary-title>span { display:inline-block; animation:title-in 1s cubic-bezier(.16,1,.3,1) both; } .intro .summary-title>span:nth-child(2) { margin-left:5px; animation-delay:.12s; }
+  .title-dot { color:var(--accent); } .intro .summary-subtitle { display:block; margin:0; font-size:12px; color:#a9b0a1; }
   .search-box { display:flex; align-items:center; gap:11px; margin:19px 22px 17px; padding:12px 0; border-bottom:1px solid #85917870; flex-shrink:0; color:#c3cdb8; transition:border-color .25s; }
   .search-box:focus-within { border-color:#e1e7d9; } .search-box input { background:none; border:0; outline:none; min-width:0; width:100%; font-size:12px; color:#e6e8df; } .search-box input::placeholder { color:#9aa291; } .search-box :global(svg) { flex-shrink:0; }
   .search-box button { display:flex; border:0; padding:0; background:none; } .search-box kbd { font:9px inherit; color:#9ba48f; white-space:nowrap; border:1px solid var(--edge); border-radius:3px; padding:3px 4px; }
@@ -415,12 +469,12 @@
   @keyframes row-in { from { opacity:0; transform:translateY(9px); } to { opacity:1; transform:translateY(0); } }
   @keyframes shimmer { to { background-position:-200% 0; } }
 
-  @media(max-height:760px) and (min-width:701px) { .intro { padding:19px 25px; } .intro h1 { font-size:31px; margin:15px 0 10px; } .intro p { display:none; } .search-box { margin-top:12px; margin-bottom:10px; } .explorer { top:99px; bottom:24px; } }
-  @media(max-height:560px) and (min-width:701px) { .intro { display:none; } .explorer { top:86px; bottom:14px; } .identity { top:14px; } .desktop-trigger { top:24px; }   }
+  @media(max-height:760px) and (min-width:701px) { .intro { padding:19px 25px; } .intro .summary-title { font-size:31px; margin:15px 0 10px; } .intro .summary-subtitle { display:none; } .search-box { margin-top:12px; margin-bottom:10px; } .explorer { top:99px; height:calc(100dvh - 123px); } }
+  @media(max-height:560px) and (min-width:701px) { .intro { padding:14px 20px; } .intro .summary-title { font-size:23px; margin:0; } .intro .eyebrow,.intro .summary-subtitle { display:none; } .explorer { top:86px; height:calc(100dvh - 100px); } .identity { top:14px; }   }
   @media(max-width:700px) {
-    .desktop-trigger,.intro { display:none; }
+    .intro { display:none; }
     .identity { top:17px; left:16px; padding:8px 10px; gap:8px; } .brand-mark { width:27px; height:30px; } .identity strong { font-size:18px; letter-spacing:-.7px; } .identity p { font-size:6px; letter-spacing:1px; }
-    .explorer { top:auto; left:12px; bottom:91px; width:calc(100% - 24px); max-height:calc(100dvh - 190px); min-height:45dvh; background:#171a19fc; border-radius:8px; transform:translateY(35px); opacity:0; visibility:hidden; pointer-events:none; animation:none; transition:transform .55s cubic-bezier(.16,1,.3,1),opacity .25s,visibility .4s; }
+    .explorer { top:auto; height:auto; left:12px; bottom:91px; width:calc(100% - 24px); max-height:calc(100dvh - 190px); min-height:45dvh; background:#171a19fc; border-radius:8px; transform:translateY(35px); opacity:0; visibility:hidden; pointer-events:none; animation:none; transition:transform .55s cubic-bezier(.16,1,.3,1),opacity .25s,visibility .4s; }
     .explorer.mobile-open { opacity:1; transform:translateY(0); visibility:visible; pointer-events:auto; }
     .explorer::before { content:''; width:30px; height:3px; background:#b5c4a546; border-radius:3px; margin:10px auto 0; flex-shrink:0; } .search-box { margin:7px 22px 4px; padding:12px 0; } .search-box kbd { display:none; } .tabs { margin:0 20px; } .tabs button { padding:15px 0; }
     .panel-content { max-height:46dvh; padding-top:0; } .category-nav { margin-top:15px; } .layer-guidance { margin-bottom:16px; } .layer-row { padding:14px 10px; } footer { padding:13px 20px; }
