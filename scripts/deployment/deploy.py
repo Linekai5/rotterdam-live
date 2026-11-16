@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Trusted host entrypoint: deploy main's frontend without checking out private files."""
 import fcntl
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -20,17 +21,72 @@ def output(*args):
     return subprocess.check_output(list(map(str, args)), text=True).strip()
 
 
+def read_status(path):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def publish_github_status(sha, status, description):
+    repository = os.environ.get('DEPLOY_GITHUB_REPOSITORY')
+    if not repository:
+        return False
+    try:
+        subprocess.run([
+            'gh', 'api', '--method', 'POST', f'repos/{repository}/statuses/{sha}',
+            '-f', f'state={status}', '-f', 'context=Production deployment',
+            '-f', f'description={description}',
+            '-f', f'target_url={os.environ["DEPLOY_URL"].rstrip("/")}/version.json',
+        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=20)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        print('Could not publish GitHub deployment status; local status is retained.', flush=True)
+        return False
+
+
+def report_status(state, sha, status, description):
+    path = state / 'status.json'
+    previous = read_status(path)
+    same = all(previous.get(key) == value for key, value in
+               {'sha': sha, 'state': status, 'description': description}.items())
+    if same and (previous.get('github_published') or not os.environ.get('DEPLOY_GITHUB_REPOSITORY')):
+        return
+    published = publish_github_status(sha, status, description)
+    record = {'sha': sha, 'state': status, 'description': description,
+              'updated_at': datetime.now(timezone.utc).isoformat(), 'github_published': published}
+    pending = state / 'status.tmp'
+    pending.write_text(json.dumps(record) + '\n')
+    pending.replace(path)
+
+
+def failure_description(error):
+    if isinstance(error, subprocess.CalledProcessError):
+        command = error.cmd
+        if 'scripts/check-live-weather.mjs' in command:
+            return 'Weather API compatibility check failed; previous release kept.'
+        if 'build' in command:
+            return 'Frontend build failed; previous release kept.'
+        if 'npm' in command and 'test' in command:
+            return 'Frontend tests failed; previous release kept.'
+    return 'Deployment failed; inspect the server deployment logs.'
+
+
 def main():
     source = Path(os.environ['DEPLOY_SOURCE'])
     state = Path(os.environ['DEPLOY_STATE'])
     compose = Path(os.environ['DEPLOY_COMPOSE'])
     url = os.environ['DEPLOY_URL'].rstrip('/')
     state.mkdir(parents=True, exist_ok=True)
-    lock = (state / 'lock').open('w')
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        return
+    with (state / 'lock').open('w') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        check_main(source, state, compose, url)
+
+
+def check_main(source, state, compose, url):
     run('git', '-C', source, 'fetch', 'origin', 'main')
     sha = output('git', '-C', source, 'rev-parse', 'FETCH_HEAD')
     if not re.fullmatch('[0-9a-f]{40}', sha):
@@ -38,7 +94,22 @@ def main():
     deployed = state / 'deployed.json'
     if deployed.exists() and json.loads(deployed.read_text())['sha'] == sha:
         print('Already deployed', sha, flush=True)
+        report_status(state, sha, 'success', 'Verified release is live.')
         return
+    # Leave a failed commit visibly failed while retrying, rather than posting
+    # pending/failure repeatedly on every timer tick.
+    if read_status(state / 'status.json').get('sha') != sha:
+        report_status(state, sha, 'pending', 'Building and checking the production release.')
+    try:
+        deploy_release(source, state, compose, url, sha)
+    except Exception as error:
+        report_status(state, sha, 'failure', failure_description(error))
+        raise
+    report_status(state, sha, 'success', 'Verified release is live.')
+
+
+def deploy_release(source, state, compose, url, sha):
+    deployed = state / 'deployed.json'
     image = f'rotterdam_live_web:{sha}'
     previous = output('docker', 'inspect', 'rotterdam_live_web', '--format', '{{.Image}}')
     # Retain an explicit tag even when the old running image has lost its name.

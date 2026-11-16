@@ -1,4 +1,5 @@
 import importlib.util
+import fcntl
 import io
 import json
 import os
@@ -22,9 +23,13 @@ class DeploymentTests(unittest.TestCase):
         self.calls = []
         self.failure = None
         self.bad_version = False
+        self.publisher = patch.object(deploy, 'publish_github_status', return_value=True)
+        self.published = self.publisher.start()
+        self.addCleanup(self.publisher.stop)
         self.config = patch.dict(os.environ, {
             'DEPLOY_SOURCE': str(self.root), 'DEPLOY_STATE': str(self.root / 'state'),
             'DEPLOY_COMPOSE': str(self.root / 'compose.yml'), 'DEPLOY_URL': 'https://example.org',
+            'DEPLOY_GITHUB_REPOSITORY': 'example/repository',
         })
         self.config.start()
         self.addCleanup(self.config.stop)
@@ -56,6 +61,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(activations[0][-1], 'web')
         self.assertIn('--no-deps', activations[0])
         self.assertFalse(any('reset' in c for c in self.calls))
+        self.assertEqual(json.loads((self.root / 'state/status.json').read_text())['state'], 'success')
+        self.assertEqual([c.args[1] for c in self.published.call_args_list], ['pending', 'success'])
 
     def test_unchanged_revision_skips_build(self):
         self.execute()
@@ -103,3 +110,46 @@ class DeploymentTests(unittest.TestCase):
             self.execute()
         self.assertFalse(any(c[:2] == ('docker', 'compose') for c in self.calls))
         self.assertFalse((self.root / 'state/deployed.json').exists())
+        status = json.loads((self.root / 'state/status.json').read_text())
+        self.assertEqual(status['state'], 'failure')
+        self.assertEqual(status['description'], 'Weather API compatibility check failed; previous release kept.')
+
+    def test_same_failure_is_not_repeated_on_github_on_every_retry(self):
+        self.failure = lambda args: 'scripts/check-live-weather.mjs' in args
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.execute()
+        self.published.reset_mock()
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.execute()
+        self.published.assert_not_called()
+
+    def test_successful_retry_replaces_the_failure_status(self):
+        self.failure = lambda args: 'scripts/check-live-weather.mjs' in args
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.execute()
+        self.published.reset_mock()
+        self.failure = None
+        self.execute()
+        self.assertEqual([c.args[1] for c in self.published.call_args_list], ['success'])
+        self.assertEqual(json.loads((self.root / 'state/status.json').read_text())['state'], 'success')
+
+    def test_github_reporting_failure_does_not_block_a_working_release(self):
+        self.published.return_value = False
+        self.execute()
+        self.assertTrue((self.root / 'state/deployed.json').exists())
+        status = json.loads((self.root / 'state/status.json').read_text())
+        self.assertEqual(status['state'], 'success')
+        self.assertFalse(status['github_published'])
+        self.published.reset_mock()
+        self.published.return_value = True
+        self.execute()
+        self.assertEqual([c.args[1] for c in self.published.call_args_list], ['success'])
+
+    def test_overlapping_timer_invocation_does_not_start_another_release(self):
+        state = self.root / 'state'
+        state.mkdir()
+        with (state / 'lock').open('w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.execute()
+        self.assertEqual(self.calls, [])
+        self.published.assert_not_called()
