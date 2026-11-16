@@ -47,6 +47,9 @@ python3 scripts/check-public-tree.py
   IP literals in documentation, and common credential patterns.
 - `nginx/` and `docker-compose*.yml`: deployment templates for maintainers.
 
+See the [architecture and source coverage notes](docs/artifacts/rotterdam_live_master_architecture.md)
+for the data contracts, coverage limits and verification results.
+
 The backend under `api/` is private and ignored in full. It must be supplied
 separately to use the Docker stacks; a public clone can build the frontend
 without it. Database credentials and production bind addresses belong in an

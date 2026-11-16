@@ -1,13 +1,16 @@
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import styleClean from './style_clean.json';
 import styleSatellite from './style_satellite.json';
 import styleDark from './style_dark.json';
 import { installCoastalOcean, removeCoastalOcean, OCEAN_LAYER } from './coastalOcean.js';
 import { installLiveEvents, filterLiveEvents } from './liveLayers.js';
 import { installTrafficMapLayer, setTrafficVisibility } from './trafficClient.js';
-import { MAX_ZOOM_LIMIT, calculateResponsiveMinZoom, installResponsiveMinZoom } from './cameraPhysics.js';
+import { MAX_ZOOM_LIMIT, URBAN_COVERAGE_BOUNDS, calculateCameraLimits, installResponsiveMinZoom } from './cameraPhysics.js';
 import { WEATHER_LAYER_ID } from './weatherEngine.js';
+
+maplibregl.setWorkerUrl(workerUrl);
 
 export {
   installLiveEvents,
@@ -19,10 +22,7 @@ export {
 /**
  * Coverage of the Rotterdam map tiles [SW, NE]
  */
-export const ROTTERDAM_BOUNDS = [
-  [4.379, 51.861],
-  [4.602, 51.995]
-];
+export const ROTTERDAM_BOUNDS = URBAN_COVERAGE_BOUNDS;
 
 export const STYLE_CONFIGS = {
   clean: {
@@ -53,6 +53,10 @@ export async function initMap(mapElement, onReady) {
   for (const config of Object.values(STYLE_CONFIGS)) {
     if (config.style.sources.openmaptiles) {
       config.style.sources.openmaptiles.attribution = STYLE_CONFIGS.satellite.style.sources.openmaptiles.attribution;
+    }
+    if (config.style.sources['rotterdam-mask-source'] && !config.style.layers.some(layer => layer.id === 'rotterdam-water-mask')) {
+      const background = config.style.layers.find(layer => layer.type === 'background')?.paint?.['background-color'] || config.bgColor;
+      config.style.layers.push({ id: 'rotterdam-water-mask', type: 'fill', source: 'rotterdam-mask-source', paint: { 'fill-color': background, 'fill-opacity': 1 } });
     }
   }
 
@@ -92,16 +96,17 @@ export async function initMap(mapElement, onReady) {
   }
 
   const pageOrigin = typeof window !== 'undefined' ? window.location.origin : (typeof location !== 'undefined' ? location.origin : '');
-  const responsiveMinZoom = calculateResponsiveMinZoom(mapElement);
+  const cameraLimits = calculateCameraLimits(mapElement);
+  const responsiveMinZoom = cameraLimits.minZoom;
 
   const map = new maplibregl.Map({
     container: mapElement,
     style: config.style,
-    center: [4.48, 51.92],
-    zoom: initialZoom ? Math.max(responsiveMinZoom, Math.min(MAX_ZOOM_LIMIT, initialZoom)) : 11.6,
+    center: initialZoom ? [4.48, 51.92] : cameraLimits.center,
+    zoom: initialZoom ? Math.max(responsiveMinZoom, Math.min(MAX_ZOOM_LIMIT, initialZoom)) : cameraLimits.fitZoom,
     minZoom: responsiveMinZoom,
     maxZoom: MAX_ZOOM_LIMIT,
-    maxBounds: ROTTERDAM_BOUNDS,
+    maxBounds: cameraLimits.navigationBounds,
     interactive: true,
     dragPan: true,
     scrollZoom: true,
@@ -149,12 +154,6 @@ export async function initMap(mapElement, onReady) {
 
   map.on('load', () => {
     try { map.resize(); } catch (e) {}
-    if (!initialZoom) {
-      const c = map.getContainer();
-      if (c && c.clientWidth > 160 && c.clientHeight > 160) {
-        map.fitBounds(ROTTERDAM_BOUNDS, { padding: 40, animate: false });
-      }
-    }
     if (onReady) onReady(map);
   });
 

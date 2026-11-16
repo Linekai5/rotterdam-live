@@ -69,8 +69,8 @@ test('river blend stays inside both the city and surveyed water', () => {
   }
 });
 
-test('responsive minimum zoom stays within the supported range', async () => {
-  const { MAX_ZOOM_LIMIT, calculateResponsiveMinZoom } = await import('../src/lib/cameraPhysics.js');
+test('camera limits allow a full city fit, modest zoom-out and pan room at every viewport shape', async () => {
+  const { MAX_ZOOM_LIMIT, calculateResponsiveMinZoom, calculateCameraLimits, URBAN_COVERAGE_BOUNDS } = await import('../src/lib/cameraPhysics.js');
   assert.equal(MAX_ZOOM_LIMIT, 19.5);
 
   for (const viewport of [
@@ -78,8 +78,13 @@ test('responsive minimum zoom stays within the supported range', async () => {
     { clientWidth: 1440, clientHeight: 900 },
     { clientWidth: 2560, clientHeight: 1440 }
   ]) {
-    const zoom = calculateResponsiveMinZoom(viewport);
-    assert.ok(zoom >= 10.6 && zoom <= 11.2, `minZoom ${zoom} out of [10.6, 11.2]`);
+    const limits = calculateCameraLimits(viewport);
+    assert.equal(calculateResponsiveMinZoom(viewport), limits.minZoom);
+    assert.ok(limits.fitZoom - limits.minZoom >= 0.2 && limits.fitZoom - limits.minZoom <= 0.5, 'overview only permits a modest extra zoom-out');
+    assert.ok(limits.navigationBounds[0][0] < URBAN_COVERAGE_BOUNDS[0][0]);
+    assert.ok(limits.navigationBounds[0][1] < URBAN_COVERAGE_BOUNDS[0][1]);
+    assert.ok(limits.navigationBounds[1][0] > URBAN_COVERAGE_BOUNDS[1][0]);
+    assert.ok(limits.navigationBounds[1][1] > URBAN_COVERAGE_BOUNDS[1][1]);
   }
 });
 

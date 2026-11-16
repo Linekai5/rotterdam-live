@@ -1,4 +1,4 @@
-import boundary from './rotterdam_boundary.json';
+import boundary from './rotterdam_boundary.json' with { type: 'json' };
 import metadata from './ocean-distance.json';
 import distanceUrl from './ocean-distance.png';
 import riverBlend from './river-blend.json';
@@ -121,6 +121,7 @@ class CoastalOcean {
   }
 
   render(gl, matrix) {
+    matrix = matrix?.defaultProjectionData?.mainMatrix || matrix?.modelViewProjectionMatrix || matrix;
     gl.useProgram(this.program);
     gl.disable(gl.CULL_FACE);
     gl.disable(gl.DEPTH_TEST);

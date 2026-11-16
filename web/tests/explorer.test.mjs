@@ -1,12 +1,46 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MAP_DATASETS, DATASET_BY_ID, normalizeFeature, featureDetails, featureAction, featureDescription, geometryBounds, intersectsBounds, datasetParameters, isPrimaryEvent } from '../src/lib/explorerData.js';
-import { createMapDataController } from '../src/lib/mapDataController.js';
+import { MAP_DATASETS, DATASET_BY_ID, normalizeFeature, featureSubtitle, featureDetails, featureAction, featureDescription, geometryBounds, intersectsBounds, datasetParameters, isPrimaryEvent, pointLocationKey, locationLabel, feedMetadata } from '../src/lib/explorerData.js';
+import { createMapDataController, requestClusterData } from '../src/lib/mapDataController.js';
 const createController = (map, onChange, onSelect, onHover) => createMapDataController(map, onChange, onSelect, onHover, { decodeSymbol: async () => ({ width: 1, height: 1, data: new Uint8Array(4) }) });
 
 const point = (id = 'one', x = 4.48, y = 51.92) => ({ type: 'Feature', id, geometry: { type: 'Point', coordinates: [x, y] }, properties: { title: id } });
 const response = features => ({ ok: true, json: async () => ({ type: 'FeatureCollection', features }) });
 const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+
+test('point locations group honestly while area features and approximate news remain distinct', () => {
+  assert.equal(pointLocationKey(point('one')), pointLocationKey(point('two')));
+  assert.notEqual(pointLocationKey(point('one')), pointLocationKey(point('other', 4.49)));
+  assert.equal(pointLocationKey({ geometry: { type: 'Polygon', coordinates: [[[4.4, 51.9], [4.5, 51.9], [4.4, 51.9]]] } }), null);
+  assert.equal(pointLocationKey({}), null);
+  const approximate = { ...point(), properties: { __dataset: 'news', details: { location_precision: 'city' } } };
+  assert.equal(locationLabel(approximate), 'Rotterdam-wide report');
+  assert.equal(featureSubtitle(approximate), 'Rotterdam-wide report');
+  assert.equal(locationLabel(approximate, 'nl'), 'Bericht over heel Rotterdam');
+  assert.equal(locationLabel({ ...point(), properties: { __dataset: 'news' } }), 'Location is approximate');
+});
+
+test('cluster requests support callbacks and Promises without duplicate delivery', async () => {
+  for (const mode of ['callback', 'promise', 'both']) {
+    const values = [];
+    const source = { expand(id, callback) {
+      if (mode !== 'promise') callback(null, id + 1);
+      if (mode !== 'callback') return Promise.resolve(id + 1);
+    } };
+    requestClusterData(source, 'expand', [19], (error, value) => { assert.equal(error, null); values.push(value); });
+    await settle();
+    assert.deepEqual(values, [20], mode);
+  }
+});
+
+test('source metadata never invents freshness from successful HTTP or empty collections', () => {
+  assert.equal(feedMetadata({ features: [] }).freshness, 'unknown');
+  assert.equal(feedMetadata({ data_status: 'fresh' }).freshness, 'unknown');
+  assert.equal(feedMetadata({ data_status: 'stale', observed_at: '2001-01-01T00:00:00Z' }).freshness, 'stale');
+  const now = Date.parse('2026-11-14T10:00:00Z');
+  assert.equal(feedMetadata({ data_status: 'fresh', observed_at: '2026-11-14T09:00:00Z', max_age_seconds: 60 }, now).freshness, 'stale');
+  assert.equal(feedMetadata({ data_status: 'fresh', observed_at: '2099-01-01T00:00:00Z' }, now).freshness, 'unknown');
+});
 class FakeMap {
   constructor() { this.sources = new Map(); this.layers = new Map(); this.images = new Map(); this.events = new Map(); }
   getBounds() { return { getWest: () => 4.4, getSouth: () => 51.88, getEast: () => 4.6, getNorth: () => 51.97 }; }
@@ -129,5 +163,53 @@ test('filter changes discard superseded results and style replacement restores s
     assert.equal(map.getLayer('explore-amenities-point').type, 'symbol');
     assert.equal(map.hasImage('city-mark-toilet'), true);
     assert.equal(pending.length, requestCount);
+  } finally { controller.destroy(); globalThis.fetch = original; }
+});
+
+test('HTTP200 stale metadata survives normalization and unavailable refresh retains prior records', async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ++calls === 1
+    ? { type: 'FeatureCollection', features: [point('last-report')], data_status: 'stale', source: 'Municipal source', observed_at: '2001-01-01T00:00:00Z', total_count: 71, coverage: { status: 'partial' } }
+    : { type: 'FeatureCollection', features: [], data_status: 'unavailable', total_count: 0 } });
+  const map = new FakeMap(); let state;
+  const controller = createController(map, value => state = value, () => {});
+  try {
+    controller.toggle('events'); await settle();
+    assert.equal(state.events.status, 'stale');
+    assert.equal(state.events.freshness, 'stale');
+    assert.equal(state.events.observedAt, '2001-01-01T00:00:00Z');
+    assert.equal(state.events.source, 'Municipal source');
+    assert.equal(state.events.providerTotal, 71);
+    assert.equal(state.events.totalLoaded, 1);
+    assert.equal(state.events.locations, 1);
+    assert.equal(state.events.truncated, true);
+    assert.deepEqual(state.events.coverage, { status: 'partial' });
+    controller.retry('events'); await settle();
+    assert.equal(calls, 2, 'manual retry must bypass the failed/stale cache');
+    assert.equal(state.events.status, 'stale');
+    assert.equal(state.events.features[0].id, 'last-report');
+    assert.equal(state.events.providerTotal, null);
+  } finally { controller.destroy(); globalThis.fetch = original; }
+});
+
+test('map coverage filters rendered pins while loaded records and provider totals remain truthful', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ type: 'FeatureCollection',
+    features: [point('inside'), point('outside-silhouette', 4.599, 51.90)], total_count: 2 }) });
+  const map = new FakeMap(); let state;
+  const controller = createController(map, value => state = value, () => {});
+  try {
+    controller.toggle('news'); await settle();
+    assert.equal(state.news.providerTotal, 2);
+    assert.equal(state.news.totalLoaded, 2);
+    assert.equal(state.news.features.length, 2);
+    assert.equal(state.news.mappedLoaded, 1);
+    assert.equal(state.news.mappedInView, 1);
+    assert.equal(state.news.unmappedInView, 1);
+    assert.equal(state.news.locations, 1);
+    assert.deepEqual(map.getSource('explore-news').data.features.map(f => f.id), ['inside']);
+    controller.select({ ...point('outside-search', 4.37, 51.92), properties: { title: 'Outside example' } });
+    assert.equal(map.getSource('explorer-selection'), undefined);
   } finally { controller.destroy(); globalThis.fetch = original; }
 });

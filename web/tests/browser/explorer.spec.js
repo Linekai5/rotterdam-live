@@ -1,12 +1,12 @@
 import { test, expect } from '@playwright/test';
 import { openMap } from './navigation.js';
 
-test('dragging past the west edge keeps the map in its tile coverage and allows a return pan', async ({ page }) => {
+test('dragging past the west edge keeps the map in its navigation fence and allows a return pan', async ({ page }) => {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await openMap(page, '/?zoom=13&weather=off');
   await page.waitForFunction(() => window.map?.isStyleLoaded());
-  const westLimit = await page.evaluate(() => window.map.getStyle().sources.openmaptiles.bounds[0]);
+  const westLimit = await page.evaluate(() => window.map.getMaxBounds().getWest());
   for (let attempt = 0; attempt < 5; attempt++) {
     await page.mouse.move(560, 490);
     await page.mouse.down();
@@ -196,12 +196,21 @@ test('the desktop explorer can collapse without disabling overlays, and search r
   await openMap(page, '/?weather=off');
   await page.getByRole('button', { name: 'What’s on', exact: true }).click();
   await expect(page.getByRole('button', { name: 'What’s on', exact: true })).toContainText('1 in this view');
-  await page.getByRole('button', { name: 'Hide explorer', exact: true }).click();
-  await expect(page.getByRole('complementary', { name: 'City explorer' })).toBeHidden();
+  const summary = page.getByRole('button', { name: 'Rotterdam explorer details', exact: true });
+  await summary.click();
+  await expect(summary).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('textbox', { name: 'Search Rotterdam' })).toBeHidden();
+  await expect(page.locator('.desktop-trigger')).toHaveCount(0);
   expect(await page.evaluate(() => !!window.map.getLayer('explore-events-point'))).toBe(true);
   await page.keyboard.press('Control+k');
   await expect(page.getByRole('textbox', { name: 'Search Rotterdam' })).toBeFocused();
   await expect(page.getByRole('complementary', { name: 'City explorer' })).toBeVisible();
+  await expect(summary).toHaveAttribute('aria-expanded', 'true');
+  await summary.focus();
+  await page.keyboard.press('Enter');
+  await expect(summary).toHaveAttribute('aria-expanded', 'false');
+  await page.keyboard.press('Space');
+  await expect(summary).toHaveAttribute('aria-expanded', 'true');
 });
 
 test('category navigation stays idle and camera filters request mapped locations with honest source details', async ({ page }) => {
@@ -250,6 +259,6 @@ test('map glyph hover previews the place without opening or fetching its details
   await page.mouse.click(point.x, point.y);
   const details = page.getByRole('region', { name: 'Location details' });
   await expect(details.getByRole('button', { name: 'Show on map' })).toBeVisible();
-  await expect.poll(() => page.evaluate(() => window.map.getSource('explorer-selection')?._data.features[0]?.geometry?.type)).toBe('Point');
+  await expect.poll(() => page.evaluate(async () => (await window.map.getSource('explorer-selection')?.getData())?.features[0]?.geometry?.type)).toBe('Point');
   expect(errors).toEqual([]);
 });

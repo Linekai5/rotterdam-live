@@ -9,7 +9,7 @@
  * Pre-compiled sub-5ms Redis snapshots with RFC 7232 ETag conditional caching.
  */
 
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import { API_BASE_URL } from './liveLayers.js';
 
 export const TRAFFIC_CONGESTION_COLORS = {

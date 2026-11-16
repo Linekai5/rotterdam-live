@@ -14,7 +14,7 @@
   "dependencies": {
     "@turf/turf": "^7.4.0",
     "earcut": "^2.2.4",
-    "maplibre-gl": "^2.4.0",
+    "maplibre-gl": "6.18.0",
     "svelte": "^5.45.6"
   },
   "devDependencies": {

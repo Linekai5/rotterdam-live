@@ -18,6 +18,45 @@ export const MAP_DATASETS = [
 ];
 export const DATASET_BY_ID = Object.fromEntries(MAP_DATASETS.map(item => [item.id, item]));
 export const EMPTY_COLLECTION = { type: 'FeatureCollection', features: [] };
+
+export function pointLocationKey(feature) {
+  const coordinates = feature?.geometry?.type === 'Point' && feature.geometry.coordinates;
+  return Array.isArray(coordinates) && coordinates.length >= 2 && coordinates.slice(0, 2).every(Number.isFinite) ? coordinates.slice(0, 2).map(value => value.toFixed(7)).join(',') : null;
+}
+
+export function locationPrecision(feature) {
+  const p = feature?.properties || {};
+  const value = p.location_precision || p.details?.location_precision;
+  return ['exact', 'district', 'city', 'unknown'].includes(value) ? value : 'unknown';
+}
+
+export function locationLabel(feature, language = 'en') {
+  const p = feature?.properties || {};
+  const label = p.location_label || p.details?.location_label || p.district || p.district_name;
+  const precision = locationPrecision(feature);
+  if (precision === 'exact') return label || translate(language, 'Reported location');
+  if (precision === 'district') return label ? translate(language, 'Approximate area: {area}', { area: label }) : translate(language, 'Approximate district location');
+  if (precision === 'city') return translate(language, 'Rotterdam-wide report');
+  return translate(language, 'Location is approximate');
+}
+
+/** Keep provider provenance separate from the time the browser received it. */
+export function feedMetadata(collection, now = Date.now()) {
+  const meta = collection.metadata || collection.meta || {};
+  const rawStatus = String(collection.data_status ?? meta.data_status ?? 'unknown').toLowerCase();
+  let freshness = ['fresh', 'stale', 'unavailable', 'unknown'].includes(rawStatus) ? rawStatus : ['error', 'failed'].includes(rawStatus) ? 'unavailable' : 'unknown';
+  const observed = collection.observed_at || collection.source_updated_at || collection.measured_at || collection.timestamp || meta.observed_at || meta.source_updated_at;
+  const observedAt = observed && Number.isFinite(Date.parse(observed)) ? observed : null;
+  if (freshness === 'fresh' && (!observedAt || Date.parse(observedAt) > now + 5 * 60 * 1000)) freshness = 'unknown';
+  const expires = collection.expires_at || meta.expires_at;
+  const maxAge = collection.max_age_seconds ?? meta.max_age_seconds;
+  if (freshness === 'fresh' && ((expires && Date.parse(expires) <= now) || (observedAt && Number.isFinite(maxAge) && maxAge > 0 && now - Date.parse(observedAt) > maxAge * 1000))) freshness = 'stale';
+  const sourceValue = collection.source || meta.source;
+  const source = typeof sourceValue === 'string' ? sourceValue : sourceValue?.name || null;
+  const total = collection.total_count ?? meta.total_count;
+  return { freshness, source, observedAt, coverage: collection.coverage ?? meta.coverage ?? null,
+    providerTotal: Number.isInteger(total) && total >= 0 ? total : null };
+}
 const numberFormats = {
   en: new Intl.NumberFormat('en-GB', { maximumFractionDigits: 1 }),
   nl: new Intl.NumberFormat('nl-NL', { maximumFractionDigits: 1 })
@@ -55,7 +94,9 @@ export function normalizeFeature(feature, datasetId = null, fetchedAt = Date.now
   }
   // MapLibre exposes geometry through a prototype getter; object spread alone
   // drops it and makes a visible marker appear to have no mappable location.
-  return { ...feature, type: 'Feature', geometry: feature.geometry, properties: { ...properties, __dataset: datasetId || properties.__dataset || null, __fetchedAt: fetchedAt } };
+  const display = properties.display_geometry;
+  const geometry = datasetId === 'traffic' && properties.geometry_quality === 'approximate_route_start' && display?.type === 'Point' && Array.isArray(display.coordinates) && display.coordinates.length >= 2 && display.coordinates.slice(0,2).every(Number.isFinite) ? display : feature.geometry;
+  return { ...feature, type: 'Feature', geometry, properties: { ...properties, __dataset: datasetId || properties.__dataset || null, __fetchedAt: fetchedAt } };
 }
 // Ticket providers also return parking/upgrade products. They are not activities
 // to discover on the city map; keep the original source links on actual events.
@@ -76,6 +117,7 @@ export function featureSubtitle(feature, language = 'en') {
     return `${formatNumber(p.speed_kmh, language)} km/h · ${humanize(p.congestion_level, language) || tr('Corridor estimate')}`;
   }
   if (p.__dataset === 'crowd') return `${humanize(p.crowd_status, language)} · ${tr('estimated city activity')}`;
+  if (p.__dataset === 'news') return locationLabel(feature, language);
   if (p.__dataset === 'cameras') {
     const type = p.details?.camera_type === 'anpr' ? tr('Speed camera') : humanize(p.details?.camera_type, language) || tr('Mapped camera');
     return `${type} · ${tr('mapped location')}`;
@@ -102,12 +144,17 @@ export function featureDetails(feature, language = 'en') {
     if (Number.isFinite(p.delay_seconds)) add('Extra travel time', p.delay_seconds < 60 ? `${Math.round(p.delay_seconds)} sec` : `${number(p.delay_seconds / 60)} min`);
     if (Number.isFinite(p.current_travel_time_seconds)) add('Travel time', `${number(p.current_travel_time_seconds / 60)} min`);
     add('Conditions', status(p.congestion_level));
+    if (p.speed_measurement_type === 'route_average_estimate') add('Measurement basis', tr('Calculated from reported journey time'));
+    add('Measured', date(p.measured_at));
+    if (p.geometry_quality === 'road_network_match') add('Map geometry', tr('Estimated path on the official road network'));
+    if (p.geometry_quality === 'approximate_route_start') add('Map geometry', tr('Approximate route start; road path unverified'));
   }
   if (p.__dataset === 'crowd') {
     if (Number.isFinite(p.crowd_index)) add('Activity estimate', `${number(p.crowd_index)} / 100`);
     add('Activity', status(p.crowd_status));
     if (Number.isFinite(p.active_events_count)) add('Active events', number(p.active_events_count));
     if (Number.isFinite(p.parking_occupancy_avg_pct)) add('Monitored parking', tr('{count}% occupied', { count: number(p.parking_occupancy_avg_pct) }));
+    if (Number.isFinite(d.monitored_garages_count)) add('Monitored garages', number(d.monitored_garages_count));
   }
   if (p.__dataset === 'events') {
     add('Starts', date(p.start_time));
@@ -115,6 +162,10 @@ export function featureDetails(feature, language = 'en') {
     add('Venue', p.venue?.name || p.venue_name);
     if (p.price?.min != null) add('From', `${p.price.currency || 'EUR'} ${number(p.price.min)}`);
     add('Ticket status', status(p.status));
+  }
+  if (p.__dataset === 'news') {
+    add('Map location', locationLabel(feature, language));
+    add('Location source', p.location_source || d.location_source);
   }
   if (p.__dataset === 'parking') {
     add('Status', status(d.status));
@@ -136,7 +187,7 @@ export function featureDetails(feature, language = 'en') {
   const address = [p.venue?.address || [p.street_name || d.street, p.house_number].filter(Boolean).join(' '), p.postal_code || p.venue?.postal_code].filter(Boolean).join(', ');
   add('Address', address); add('District', p.district || p.district_name);
   if (p.opening_hours || d.opening_hours) add('Opening hours', p.opening_hours || d.opening_hours);
-  const accessible = d.wheelchair_accessible ?? p.wheelchair;
+  const accessible = d.wheelchair_status ?? d.wheelchair ?? d.wheelchair_accessible ?? p.wheelchair;
   if (accessible != null) {
     const access = accessible === false || accessible === 'no' ? tr('Not listed as accessible')
       : accessible === true || accessible === 'yes' ? tr('Listed as accessible') : status(String(accessible));
@@ -187,7 +238,7 @@ export function intersectsBounds(feature, bounds) {
   return box && box[2] >= bounds[0] && box[0] <= bounds[2] && box[3] >= bounds[1] && box[1] <= bounds[3];
 }
 export function datasetParameters(definition, filters, bounds) {
-  const params = new URLSearchParams({ limit: '150', ...definition.query });
+  const params = new URLSearchParams({ limit: definition.id === 'roadworks' ? '500' : '150', ...definition.query });
   for (const filter of definition.filters || []) {
     const value = filters[filter.key];
     if (filter.key !== 'horizon' && filter.options.some(([key]) => key === value) && value) params.set(filter.key, value);

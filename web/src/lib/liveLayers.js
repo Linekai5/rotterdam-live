@@ -1,4 +1,4 @@
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import { API_BASE_URL } from './apiBase.js';
 export { API_BASE_URL } from './apiBase.js';
 

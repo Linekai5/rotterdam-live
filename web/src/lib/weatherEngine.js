@@ -770,6 +770,7 @@ export class VolumetricWeatherLayer {
   }
 
   render(gl, matrix) {
+    matrix = matrix?.defaultProjectionData?.mainMatrix || matrix?.modelViewProjectionMatrix || matrix;
     if (!this.program || !this.map || !this.stateController.isEnabled()) return;
 
     const wasDirty = this.stateController.consumeDirtyFlag();
